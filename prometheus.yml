@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'you2api'
+    static_configs:
+      - targets: ['you2api:8080'] 
