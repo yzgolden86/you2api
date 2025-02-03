@@ -38,10 +38,10 @@ func run() error {
 	http.HandleFunc("/api/", api.Handler)
 
 	port := fmt.Sprintf(":%d", config.Port)
-	fmt.Printf("Server is running on http://localhost%s\n", port)
+	fmt.Printf("Server is running on http://0.0.0.0%s\n", port)
 
 	// 启动服务器
-	if err := http.ListenAndServe(port, nil); err != nil {
+	if err := http.ListenAndServe("0.0.0.0"+port, nil); err != nil {
 		return fmt.Errorf("启动服务器失败: %w", err)
 	}
 	return nil
