@@ -29,13 +29,13 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("初始化代理失败: %w", err)
 		}
-		
+
 		// 注册代理处理器
 		http.Handle("/proxy/", http.StripPrefix("/proxy", proxy))
 	}
 
-	// 注册普通API处理器
-	http.HandleFunc("/api/", api.Handler)
+	// 注册API处理器到根路径
+	http.HandleFunc("/", api.Handler)
 
 	port := fmt.Sprintf(":%d", config.Port)
 	fmt.Printf("Server is running on http://0.0.0.0%s\n", port)
