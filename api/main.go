@@ -56,6 +56,18 @@ type OpenAIChoice struct {
 	FinishReason string  `json:"finish_reason"`
 }
 
+type ModelResponse struct {
+	Object string        `json:"object"`
+	Data   []ModelDetail `json:"data"`
+}
+
+type ModelDetail struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Created int64  `json:"created"`
+	OwnedBy string `json:"owned_by"`
+}
+
 var modelMap = map[string]string{
 	"deepseek-reasoner":  "deepseek_r1",
 	"deepseek-chat":      "deepseek_v3",
@@ -108,7 +120,38 @@ func reverseMapModelName(youModel string) string {
 var originalModel string
 
 func Handler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/v1/chat/completions" {
+	if r.URL.Path == "/v1/models" || r.URL.Path == "/api/v1/models" {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "*")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		models := make([]ModelDetail, 0, len(modelMap))
+		created := time.Now().Unix()
+		for modelID := range modelMap {
+			models = append(models, ModelDetail{
+				ID:      modelID,
+				Object:  "model",
+				Created: created,
+				OwnedBy: "organization-owner",
+			})
+		}
+
+		response := ModelResponse{
+			Object: "list",
+			Data:   models,
+		}
+
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	if r.URL.Path != "/v1/chat/completions" && r.URL.Path != "/api/v1/chat/completions" {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
 			"status":  "You2Api Service Running...",

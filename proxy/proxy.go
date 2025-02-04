@@ -8,9 +8,9 @@ import (
 )
 
 type Proxy struct {
-	target     *url.URL
-	proxy      *httputil.ReverseProxy
-	timeoutMS  int
+	target    *url.URL
+	proxy     *httputil.ReverseProxy
+	timeoutMS int
 }
 
 func NewProxy(targetURL string, timeoutMS int) (*Proxy, error) {
@@ -27,7 +27,7 @@ func NewProxy(targetURL string, timeoutMS int) (*Proxy, error) {
 	proxy.proxy = &httputil.ReverseProxy{
 		Director: proxy.director,
 		Transport: &http.Transport{
-			Proxy: http.ProxyURL(target),
+			Proxy:                 http.ProxyURL(target),
 			ResponseHeaderTimeout: time.Duration(timeoutMS) * time.Millisecond,
 		},
 	}
@@ -43,4 +43,4 @@ func (p *Proxy) director(req *http.Request) {
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.proxy.ServeHTTP(w, r)
-} 
+}
