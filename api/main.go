@@ -151,7 +151,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.URL.Path != "/v1/chat/completions" || r.URL.Path != "/api/v1/chat/completions" {
+	if r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/api/v1/chat/completions" {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
 			"status":  "You2Api Service Running...",
