@@ -120,7 +120,7 @@ func reverseMapModelName(youModel string) string {
 var originalModel string
 
 func Handler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/v1/models" || r.URL.Path == "/none/v1/models" {
+	if r.URL.Path == "/v1/models" || r.URL.Path == "/api/v1/models" {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
@@ -151,7 +151,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.URL.Path != "/v1/chat/completions" && r.URL.Path != "/api/v1/chat/completions" {
+	if r.URL.Path != "/v1/chat/completions" && r.URL.Path != "/none/v1/chat/completions" && r.URL.Path != "/such/chat/completions"{
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
 			"status":  "You2Api Service Running...",
