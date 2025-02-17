@@ -610,7 +610,7 @@ func handleStreamingResponse(w http.ResponseWriter, youReq *http.Request) {
 // 获取上传文件所需的 nonce
 func getNonce(dsToken string) (*NonceResponse, error) {
 	req, _ := http.NewRequest("GET", "https://you.com/api/get_nonce", nil)
-	req.Header.Set("Cookie", fmt.Sprintf("ds_token=%s", dsToken))
+	req.Header.Set("Cookie", fmt.Sprintf("DS=%s", dsToken))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -647,7 +647,7 @@ func uploadFile(dsToken, filePath string) (*UploadResponse, error) {
 
 	req, _ := http.NewRequest("POST", "https://you.com/api/upload", body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Cookie", fmt.Sprintf("ds_token=%s", dsToken))
+	req.Header.Set("Cookie", fmt.Sprintf("DS=%s", dsToken))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
