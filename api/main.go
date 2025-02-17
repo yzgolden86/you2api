@@ -241,8 +241,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// 转换 system 消息为 user 消息
 	openAIReq.Messages = convertSystemToUser(openAIReq.Messages)
 
-	// 计算 token 数（使用字符估算方法）
-	totalTokens, err := countTokens(openAIReq.Messages)
+	// 计算最后一条消息的 token 数（使用字符估算方法）
+	lastMessage := openAIReq.Messages[len(openAIReq.Messages)-1]
+	lastMessageTokens, err := countTokens([]Message{lastMessage})
 	if err != nil {
 		http.Error(w, "Failed to count tokens", http.StatusInternalServerError)
 		return
@@ -250,7 +251,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	// 构建 You.com 聊天历史
 	var chatHistory []map[string]interface{}
-	for _, msg := range openAIReq.Messages {
+	for _, msg := range openAIReq.Messages[:len(openAIReq.Messages)-1] { // 不包含最后一条消息
 		chatMsg := map[string]interface{}{
 			"question": msg.Content,
 			"answer":   "",
@@ -273,8 +274,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	conversationTurnId := uuid.New().String()
 	traceId := fmt.Sprintf("%s|%s|%s", chatId, conversationTurnId, time.Now().Format(time.RFC3339))
 
-	// 如果超过限制，使用文件上传
-	if totalTokens > MaxContextTokens {
+	// 如果最后一条消息超过限制，使用文件上传
+	if lastMessageTokens > MaxContextTokens {
 		// 1. 获取 nonce
 		nonceResp, err := getNonce(dsToken)
 		if err != nil {
@@ -310,12 +311,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Printf("文件上传成功: filename=%s, user_filename=%s\n", uploadResp.Filename, uploadResp.UserFilename)
 
-		// 4. 修改消息列表，只保留文件引用
-		openAIReq.Messages = []Message{
-			{
-				Role:    "user",
-				Content: fmt.Sprintf("Please review the attached file: %s", uploadResp.UserFilename),
-			},
+		// 4. 修改消息列表，保留历史记录，只将最后一条消息改为文件引用
+		lastMsg := openAIReq.Messages[len(openAIReq.Messages)-1]
+		openAIReq.Messages[len(openAIReq.Messages)-1] = Message{
+			Role:    lastMsg.Role,
+			Content: fmt.Sprintf("Please review the attached file: %s", uploadResp.UserFilename),
 		}
 
 		// 5. 添加文件源信息
@@ -351,12 +351,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		q.Add("enable_worklow_generation_ux", "true")
 		q.Add("domain", "youchat")
 		q.Add("use_personalization_extraction", "true")
-		q.Add("pastChatLength", "0")
+		q.Add("pastChatLength", fmt.Sprintf("%d", len(chatHistory)))
 		q.Add("selectedChatMode", "custom")
 		q.Add("selectedAiModel", mapModelName(openAIReq.Model))
 		q.Add("enable_agent_clarification_questions", "true")
 		q.Add("use_nested_youchat_updates", "true")
-		q.Add("chat", "[]") // 设置为空数组
+		q.Add("chat", string(chatHistoryJSON))
 		youReq.URL.RawQuery = q.Encode()
 
 		fmt.Printf("构建的请求 URL: %s\n", youReq.URL.String())
@@ -431,7 +431,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		q.Add("enable_worklow_generation_ux", "true")
 		q.Add("domain", "youchat")
 		q.Add("use_personalization_extraction", "true")
-		q.Add("pastChatLength", fmt.Sprintf("%d", len(chatHistory)-1))
+		q.Add("pastChatLength", fmt.Sprintf("%d", len(chatHistory)))
 		q.Add("selectedChatMode", "custom")
 		q.Add("selectedAiModel", mapModelName(openAIReq.Model))
 		q.Add("enable_agent_clarification_questions", "true")
