@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -277,9 +278,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		// 1. 获取 nonce
 		nonceResp, err := getNonce(dsToken)
 		if err != nil {
+			fmt.Printf("获取 nonce 失败: %v\n", err)
 			http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
 			return
 		}
+		fmt.Printf("获取到 nonce: %s\n", nonceResp.Uuid)
 
 		// 2. 创建临时文件，包含所有消息内容
 		var fileContent strings.Builder
@@ -292,6 +295,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 		tempFile := fmt.Sprintf("temp_%s.txt", nonceResp.Uuid)
 		if err := os.WriteFile(tempFile, []byte(fileContent.String()), 0644); err != nil {
+			fmt.Printf("创建临时文件失败: %v\n", err)
 			http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
 			return
 		}
@@ -300,9 +304,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		// 3. 上传文件
 		uploadResp, err := uploadFile(dsToken, tempFile)
 		if err != nil {
+			fmt.Printf("上传文件失败: %v\n", err)
 			http.Error(w, "Failed to upload file", http.StatusInternalServerError)
 			return
 		}
+		fmt.Printf("文件上传成功: filename=%s, user_filename=%s\n", uploadResp.Filename, uploadResp.UserFilename)
 
 		// 4. 修改消息列表，只保留文件引用
 		openAIReq.Messages = []Message{
@@ -321,11 +327,18 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				"size_bytes":    len(fileContent.String()),
 			},
 		}
-		sourcesJSON, _ := json.Marshal(sources)
+		sourcesJSON, err := json.Marshal(sources)
+		if err != nil {
+			fmt.Printf("序列化 sources 失败: %v\n", err)
+			http.Error(w, "Failed to marshal sources", http.StatusInternalServerError)
+			return
+		}
 
 		// 更新查询参数
 		q := youReq.URL.Query()
-		q.Add("sources", string(sourcesJSON))
+		// URL 编码 sources JSON
+		encodedSources := url.QueryEscape(string(sourcesJSON))
+		q.Add("sources", encodedSources)
 		q.Add("chatId", chatId)
 		q.Add("queryTraceId", chatId)
 		q.Add("conversationTurnId", conversationTurnId)
@@ -345,6 +358,64 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		q.Add("use_nested_youchat_updates", "true")
 		q.Add("chat", string(chatHistoryJSON))
 		youReq.URL.RawQuery = q.Encode()
+
+		fmt.Printf("构建的请求 URL: %s\n", youReq.URL.String())
+
+		// 设置请求头
+		youReq.Header = http.Header{
+			"sec-ch-ua-platform":         {"Windows"},
+			"Cache-Control":              {"no-cache"},
+			"sec-ch-ua":                  {`"Not(A:Brand";v="99", "Microsoft Edge";v="133", "Chromium";v="133"`},
+			"sec-ch-ua-bitness":          {"64"},
+			"sec-ch-ua-model":            {""},
+			"sec-ch-ua-mobile":           {"?0"},
+			"sec-ch-ua-arch":             {"x86"},
+			"sec-ch-ua-full-version":     {"133.0.3065.39"},
+			"Accept":                     {"text/event-stream"},
+			"User-Agent":                 {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0"},
+			"sec-ch-ua-platform-version": {"19.0.0"},
+			"Sec-Fetch-Site":             {"same-origin"},
+			"Sec-Fetch-Mode":             {"cors"},
+			"Sec-Fetch-Dest":             {"empty"},
+			"Host":                       {"you.com"},
+		}
+
+		// 设置 Cookie
+		cookies := getCookies(dsToken)
+		var cookieStrings []string
+		for name, value := range cookies {
+			cookieStrings = append(cookieStrings, fmt.Sprintf("%s=%s", name, value))
+		}
+		youReq.Header.Add("Cookie", strings.Join(cookieStrings, ";"))
+
+		// 发送请求并获取响应
+		client := &http.Client{}
+		resp, err := client.Do(youReq)
+		if err != nil {
+			fmt.Printf("发送请求失败: %v\n", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer resp.Body.Close()
+
+		// 打印响应状态码
+		fmt.Printf("响应状态码: %d\n", resp.StatusCode)
+
+		// 如果状态码不是 200，打印响应内容
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			fmt.Printf("错误响应内容: %s\n", string(body))
+			http.Error(w, fmt.Sprintf("API returned status %d", resp.StatusCode), resp.StatusCode)
+			return
+		}
+
+		// 根据 OpenAI 请求的 stream 参数选择处理函数
+		if !openAIReq.Stream {
+			handleNonStreamingResponse(w, youReq) // 处理非流式响应
+			return
+		}
+
+		handleStreamingResponse(w, youReq) // 处理流式响应
 	} else {
 		// 构建常规查询参数
 		q := youReq.URL.Query()
@@ -367,42 +438,42 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		q.Add("use_nested_youchat_updates", "true")
 		q.Add("chat", string(chatHistoryJSON))
 		youReq.URL.RawQuery = q.Encode()
-	}
 
-	// 设置 You.com API 请求头
-	youReq.Header = http.Header{
-		"sec-ch-ua-platform":         {"Windows"},
-		"Cache-Control":              {"no-cache"},
-		"sec-ch-ua":                  {`"Not(A:Brand";v="99", "Microsoft Edge";v="133", "Chromium";v="133"`},
-		"sec-ch-ua-bitness":          {"64"},
-		"sec-ch-ua-model":            {""},
-		"sec-ch-ua-mobile":           {"?0"},
-		"sec-ch-ua-arch":             {"x86"},
-		"sec-ch-ua-full-version":     {"133.0.3065.39"},
-		"Accept":                     {"text/event-stream"}, // 重要：接受 SSE 流
-		"User-Agent":                 {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0"},
-		"sec-ch-ua-platform-version": {"19.0.0"},
-		"Sec-Fetch-Site":             {"same-origin"},
-		"Sec-Fetch-Mode":             {"cors"},
-		"Sec-Fetch-Dest":             {"empty"},
-		"Host":                       {"you.com"},
-	}
+		// 设置 You.com API 请求头
+		youReq.Header = http.Header{
+			"sec-ch-ua-platform":         {"Windows"},
+			"Cache-Control":              {"no-cache"},
+			"sec-ch-ua":                  {`"Not(A:Brand";v="99", "Microsoft Edge";v="133", "Chromium";v="133"`},
+			"sec-ch-ua-bitness":          {"64"},
+			"sec-ch-ua-model":            {""},
+			"sec-ch-ua-mobile":           {"?0"},
+			"sec-ch-ua-arch":             {"x86"},
+			"sec-ch-ua-full-version":     {"133.0.3065.39"},
+			"Accept":                     {"text/event-stream"}, // 重要：接受 SSE 流
+			"User-Agent":                 {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0"},
+			"sec-ch-ua-platform-version": {"19.0.0"},
+			"Sec-Fetch-Site":             {"same-origin"},
+			"Sec-Fetch-Mode":             {"cors"},
+			"Sec-Fetch-Dest":             {"empty"},
+			"Host":                       {"you.com"},
+		}
 
-	// 设置 You.com API 请求的 Cookie
-	cookies := getCookies(dsToken)
-	var cookieStrings []string
-	for name, value := range cookies {
-		cookieStrings = append(cookieStrings, fmt.Sprintf("%s=%s", name, value))
-	}
-	youReq.Header.Add("Cookie", strings.Join(cookieStrings, ";"))
+		// 设置 You.com API 请求的 Cookie
+		cookies := getCookies(dsToken)
+		var cookieStrings []string
+		for name, value := range cookies {
+			cookieStrings = append(cookieStrings, fmt.Sprintf("%s=%s", name, value))
+		}
+		youReq.Header.Add("Cookie", strings.Join(cookieStrings, ";"))
 
-	// 根据 OpenAI 请求的 stream 参数选择处理函数
-	if !openAIReq.Stream {
-		handleNonStreamingResponse(w, youReq) // 处理非流式响应
-		return
-	}
+		// 根据 OpenAI 请求的 stream 参数选择处理函数
+		if !openAIReq.Stream {
+			handleNonStreamingResponse(w, youReq) // 处理非流式响应
+			return
+		}
 
-	handleStreamingResponse(w, youReq) // 处理流式响应
+		handleStreamingResponse(w, youReq) // 处理流式响应
+	}
 }
 
 // getCookies 根据提供的 DS token 生成所需的 Cookie。
