@@ -343,6 +343,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			chatJSON = string(chatHistoryJSON)
 			pastChatLength = fmt.Sprintf("%d", len(chatHistory))
 		}
+		fmt.Printf("聊天历史状态: chatJSON=%s, pastChatLength=%s\n", chatJSON, pastChatLength)
 
 		// 基本参数
 		q.Add("page", "1")
@@ -358,14 +359,18 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		q.Add("chatId", chatId)
 		q.Add("conversationTurnId", conversationTurnId)
 		q.Add("traceId", traceId)
+		fmt.Printf("生成的 ID: chatId=%s, conversationTurnId=%s, traceId=%s\n", chatId, conversationTurnId, traceId)
 
 		// 聊天相关参数
 		q.Add("pastChatLength", pastChatLength)
 		q.Add("selectedChatMode", "custom")
 		q.Add("selectedAiModel", mapModelName(openAIReq.Model))
+		fmt.Printf("模型信息: 原始模型=%s, 映射后模型=%s\n", openAIReq.Model, mapModelName(openAIReq.Model))
 
 		// 文件源信息
-		q.Add("sources", string(sourcesJSON)) // 不需要额外的 URL 编码
+		sourcesJSONStr := string(sourcesJSON)
+		q.Add("sources", sourcesJSONStr)
+		fmt.Printf("文件源信息: %s\n", sourcesJSONStr)
 
 		// 其他参数
 		q.Add("enable_agent_clarification_questions", "true")
@@ -375,7 +380,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 		youReq.URL.RawQuery = q.Encode()
 
-		fmt.Printf("构建的请求 URL: %s\n", youReq.URL.String())
+		fmt.Printf("\n=== 完整请求信息 ===\n")
+		fmt.Printf("请求 URL: %s\n", youReq.URL.String())
+		fmt.Printf("请求头:\n")
+		for key, values := range youReq.Header {
+			fmt.Printf("%s: %v\n", key, values)
+		}
 
 		// 设置请求头
 		youReq.Header = http.Header{
@@ -403,6 +413,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			cookieStrings = append(cookieStrings, fmt.Sprintf("%s=%s", name, value))
 		}
 		youReq.Header.Add("Cookie", strings.Join(cookieStrings, ";"))
+		fmt.Printf("Cookie: %s\n", strings.Join(cookieStrings, ";"))
+		fmt.Printf("===================\n\n")
 
 		// 发送请求并获取响应
 		client := &http.Client{}
@@ -443,6 +455,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			chatJSON = string(chatHistoryJSON)
 			pastChatLength = fmt.Sprintf("%d", len(chatHistory))
 		}
+		fmt.Printf("聊天历史状态: chatJSON=%s, pastChatLength=%s\n", chatJSON, pastChatLength)
 
 		// 基本参数
 		q.Add("page", "1")
@@ -458,12 +471,14 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		q.Add("chatId", chatId)
 		q.Add("conversationTurnId", conversationTurnId)
 		q.Add("traceId", traceId)
+		fmt.Printf("生成的 ID: chatId=%s, conversationTurnId=%s, traceId=%s\n", chatId, conversationTurnId, traceId)
 
 		// 聊天相关参数
 		q.Add("q", openAIReq.Messages[len(openAIReq.Messages)-1].Content)
 		q.Add("pastChatLength", pastChatLength)
 		q.Add("selectedChatMode", "custom")
 		q.Add("selectedAiModel", mapModelName(openAIReq.Model))
+		fmt.Printf("模型信息: 原始模型=%s, 映射后模型=%s\n", openAIReq.Model, mapModelName(openAIReq.Model))
 
 		// 其他参数
 		q.Add("enable_agent_clarification_questions", "true")
@@ -472,7 +487,14 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 		youReq.URL.RawQuery = q.Encode()
 
-		// 设置 You.com API 请求头
+		fmt.Printf("\n=== 完整请求信息 ===\n")
+		fmt.Printf("请求 URL: %s\n", youReq.URL.String())
+		fmt.Printf("请求头:\n")
+		for key, values := range youReq.Header {
+			fmt.Printf("%s: %v\n", key, values)
+		}
+
+		// 设置请求头
 		youReq.Header = http.Header{
 			"sec-ch-ua-platform":         {"Windows"},
 			"Cache-Control":              {"no-cache"},
@@ -482,7 +504,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			"sec-ch-ua-mobile":           {"?0"},
 			"sec-ch-ua-arch":             {"x86"},
 			"sec-ch-ua-full-version":     {"133.0.3065.39"},
-			"Accept":                     {"text/event-stream"}, // 重要：接受 SSE 流
+			"Accept":                     {"text/event-stream"},
 			"User-Agent":                 {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0"},
 			"sec-ch-ua-platform-version": {"19.0.0"},
 			"Sec-Fetch-Site":             {"same-origin"},
@@ -491,13 +513,15 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			"Host":                       {"you.com"},
 		}
 
-		// 设置 You.com API 请求的 Cookie
+		// 设置 Cookie
 		cookies := getCookies(dsToken)
 		var cookieStrings []string
 		for name, value := range cookies {
 			cookieStrings = append(cookieStrings, fmt.Sprintf("%s=%s", name, value))
 		}
 		youReq.Header.Add("Cookie", strings.Join(cookieStrings, ";"))
+		fmt.Printf("Cookie: %s\n", strings.Join(cookieStrings, ";"))
+		fmt.Printf("===================\n\n")
 
 		// 根据 OpenAI 请求的 stream 参数选择处理函数
 		if !openAIReq.Stream {
