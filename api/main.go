@@ -155,7 +155,7 @@ var originalModel string
 
 // NonceResponse 定义了获取 nonce 的响应结构
 type NonceResponse struct {
-	Uuid string `json:"uuid"`
+	Uuid string
 }
 
 // UploadResponse 定义了文件上传的响应结构
@@ -618,11 +618,16 @@ func getNonce(dsToken string) (*NonceResponse, error) {
 	}
 	defer resp.Body.Close()
 
-	var nonceResp NonceResponse
-	if err := json.NewDecoder(resp.Body).Decode(&nonceResp); err != nil {
-		return nil, err
+	// 读取完整的响应内容
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %v", err)
 	}
-	return &nonceResp, nil
+
+	// 直接使用响应内容作为 UUID
+	return &NonceResponse{
+		Uuid: strings.TrimSpace(string(body)),
+	}, nil
 }
 
 // 上传文件
