@@ -303,13 +303,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed to upload file", http.StatusInternalServerError)
 			return
 		}
-		fmt.Printf("文件上传成功: filename=%s, user_filename=%s\n", uploadResp.Filename, uploadResp.UserFilename)
-
-		// 更新最后一条消息为文件引用
-		openAIReq.Messages[len(openAIReq.Messages)-1] = Message{
-			Role:    lastMsg.Role,
-			Content: fmt.Sprintf("Please review the attached file: %s", uploadResp.UserFilename),
-		}
 
 		// 添加文件源信息
 		sources := []map[string]interface{}{
@@ -337,7 +330,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			chatJSON = string(chatHistoryJSON)
 			pastChatLength = fmt.Sprintf("%d", len(chatHistory))
 		}
-		fmt.Printf("聊天历史状态: chatJSON=%s, pastChatLength=%s\n", chatJSON, pastChatLength)
 
 		// 按照官方URL格式设置参数
 		q.Add("page", "1")
@@ -437,34 +429,25 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			chatJSON = string(chatHistoryJSON)
 			pastChatLength = fmt.Sprintf("%d", len(chatHistory))
 		}
-		fmt.Printf("聊天历史状态: chatJSON=%s, pastChatLength=%s\n", chatJSON, pastChatLength)
 
-		// 基本参数
+		// 按照官方URL格式设置参数
 		q.Add("page", "1")
 		q.Add("count", "10")
-		q.Add("safeSearch", "Off") // 改为 Off
-		q.Add("mkt", "en-US")      // 改为 en-US
+		q.Add("safeSearch", "Off")
+		q.Add("mkt", "en-US")
 		q.Add("enable_worklow_generation_ux", "true")
 		q.Add("domain", "youchat")
 		q.Add("use_personalization_extraction", "true")
-
-		// ID 相关参数
 		q.Add("queryTraceId", chatId)
 		q.Add("chatId", chatId)
 		q.Add("conversationTurnId", conversationTurnId)
-		q.Add("traceId", traceId)
-		fmt.Printf("生成的 ID: chatId=%s, conversationTurnId=%s, traceId=%s\n", chatId, conversationTurnId, traceId)
-
-		// 聊天相关参数
-		q.Add("q", openAIReq.Messages[len(openAIReq.Messages)-1].Content)
 		q.Add("pastChatLength", pastChatLength)
 		q.Add("selectedChatMode", "custom")
 		q.Add("selectedAiModel", mapModelName(openAIReq.Model))
-		fmt.Printf("模型信息: 原始模型=%s, 映射后模型=%s\n", openAIReq.Model, mapModelName(openAIReq.Model))
-
-		// 其他参数
 		q.Add("enable_agent_clarification_questions", "true")
+		q.Add("traceId", traceId)
 		q.Add("use_nested_youchat_updates", "true")
+		q.Add("q", openAIReq.Messages[len(openAIReq.Messages)-1].Content)
 		q.Add("chat", chatJSON)
 
 		youReq.URL.RawQuery = q.Encode()
