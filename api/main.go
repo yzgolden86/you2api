@@ -8,7 +8,6 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -336,27 +335,44 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 		// 更新查询参数
 		q := youReq.URL.Query()
-		// URL 编码 sources JSON
-		encodedSources := url.QueryEscape(string(sourcesJSON))
-		q.Add("sources", encodedSources)
-		q.Add("chatId", chatId)
-		q.Add("queryTraceId", chatId)
-		q.Add("conversationTurnId", conversationTurnId)
-		q.Add("traceId", traceId)
-		q.Add("q", fmt.Sprintf("Please review the attached file: %s", uploadResp.UserFilename))
+
+		// 如果是第一次聊天（没有历史记录），使用空数组
+		chatJSON := "[]"
+		pastChatLength := "0"
+		if len(chatHistory) > 0 {
+			chatJSON = string(chatHistoryJSON)
+			pastChatLength = fmt.Sprintf("%d", len(chatHistory))
+		}
+
+		// 基本参数
 		q.Add("page", "1")
 		q.Add("count", "10")
-		q.Add("safeSearch", "Moderate")
-		q.Add("mkt", "zh-HK")
+		q.Add("safeSearch", "Off") // 改为 Off
+		q.Add("mkt", "en-US")      // 改为 en-US
 		q.Add("enable_worklow_generation_ux", "true")
 		q.Add("domain", "youchat")
 		q.Add("use_personalization_extraction", "true")
-		q.Add("pastChatLength", fmt.Sprintf("%d", len(chatHistory)))
+
+		// ID 相关参数
+		q.Add("queryTraceId", chatId)
+		q.Add("chatId", chatId)
+		q.Add("conversationTurnId", conversationTurnId)
+		q.Add("traceId", traceId)
+
+		// 聊天相关参数
+		q.Add("pastChatLength", pastChatLength)
 		q.Add("selectedChatMode", "custom")
 		q.Add("selectedAiModel", mapModelName(openAIReq.Model))
+
+		// 文件源信息
+		q.Add("sources", string(sourcesJSON)) // 不需要额外的 URL 编码
+
+		// 其他参数
 		q.Add("enable_agent_clarification_questions", "true")
 		q.Add("use_nested_youchat_updates", "true")
-		q.Add("chat", string(chatHistoryJSON))
+		q.Add("q", fmt.Sprintf("Please review the attached file: %s", uploadResp.UserFilename))
+		q.Add("chat", chatJSON)
+
 		youReq.URL.RawQuery = q.Encode()
 
 		fmt.Printf("构建的请求 URL: %s\n", youReq.URL.String())
@@ -419,24 +435,41 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// 构建常规查询参数
 		q := youReq.URL.Query()
-		q.Add("q", openAIReq.Messages[len(openAIReq.Messages)-1].Content)
-		q.Add("chatId", chatId)
-		q.Add("queryTraceId", chatId)
-		q.Add("conversationTurnId", conversationTurnId)
-		q.Add("traceId", traceId)
+
+		// 如果是第一次聊天（没有历史记录），使用空数组
+		chatJSON := "[]"
+		pastChatLength := "0"
+		if len(chatHistory) > 0 {
+			chatJSON = string(chatHistoryJSON)
+			pastChatLength = fmt.Sprintf("%d", len(chatHistory))
+		}
+
+		// 基本参数
 		q.Add("page", "1")
 		q.Add("count", "10")
-		q.Add("safeSearch", "Moderate")
-		q.Add("mkt", "zh-HK")
+		q.Add("safeSearch", "Off") // 改为 Off
+		q.Add("mkt", "en-US")      // 改为 en-US
 		q.Add("enable_worklow_generation_ux", "true")
 		q.Add("domain", "youchat")
 		q.Add("use_personalization_extraction", "true")
-		q.Add("pastChatLength", fmt.Sprintf("%d", len(chatHistory)))
+
+		// ID 相关参数
+		q.Add("queryTraceId", chatId)
+		q.Add("chatId", chatId)
+		q.Add("conversationTurnId", conversationTurnId)
+		q.Add("traceId", traceId)
+
+		// 聊天相关参数
+		q.Add("q", openAIReq.Messages[len(openAIReq.Messages)-1].Content)
+		q.Add("pastChatLength", pastChatLength)
 		q.Add("selectedChatMode", "custom")
 		q.Add("selectedAiModel", mapModelName(openAIReq.Model))
+
+		// 其他参数
 		q.Add("enable_agent_clarification_questions", "true")
 		q.Add("use_nested_youchat_updates", "true")
-		q.Add("chat", string(chatHistoryJSON))
+		q.Add("chat", chatJSON)
+
 		youReq.URL.RawQuery = q.Encode()
 
 		// 设置 You.com API 请求头
