@@ -3,6 +3,7 @@ module you2api
 go 1.22.2
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.18.0
 	go.uber.org/zap v1.26.0
 )
