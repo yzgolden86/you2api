@@ -343,7 +343,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		q.Add("queryTraceId", chatId)
 		q.Add("conversationTurnId", conversationTurnId)
 		q.Add("traceId", traceId)
-		q.Add("q", openAIReq.Messages[0].Content)
+		q.Add("q", fmt.Sprintf("Please review the attached file: %s", uploadResp.UserFilename))
 		q.Add("page", "1")
 		q.Add("count", "10")
 		q.Add("safeSearch", "Moderate")
@@ -351,12 +351,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		q.Add("enable_worklow_generation_ux", "true")
 		q.Add("domain", "youchat")
 		q.Add("use_personalization_extraction", "true")
-		q.Add("pastChatLength", fmt.Sprintf("%d", len(chatHistory)-1))
+		q.Add("pastChatLength", "0")
 		q.Add("selectedChatMode", "custom")
 		q.Add("selectedAiModel", mapModelName(openAIReq.Model))
 		q.Add("enable_agent_clarification_questions", "true")
 		q.Add("use_nested_youchat_updates", "true")
-		q.Add("chat", string(chatHistoryJSON))
+		q.Add("chat", "[]") // 设置为空数组
 		youReq.URL.RawQuery = q.Encode()
 
 		fmt.Printf("构建的请求 URL: %s\n", youReq.URL.String())
