@@ -284,24 +284,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Printf("获取到 nonce: %s\n", nonceResp.Uuid)
 
-		// 2. 创建临时文件，包含所有消息内容
-		var fileContent strings.Builder
-		for i, msg := range openAIReq.Messages {
-			if i > 0 {
-				fileContent.WriteString("\n\n")
-			}
-			fileContent.WriteString(fmt.Sprintf("%s: %s", msg.Role, msg.Content))
-		}
+		// 4. 修改消息列表，保留历史记录，只将最后一条消息改为文件引用
+		lastMsg := openAIReq.Messages[len(openAIReq.Messages)-1]
 
+		// 创建临时文件，包含最后一条消息的内容
 		tempFile := fmt.Sprintf("temp_%s.txt", nonceResp.Uuid)
-		if err := os.WriteFile(tempFile, []byte(fileContent.String()), 0644); err != nil {
+		if err := os.WriteFile(tempFile, []byte(lastMsg.Content), 0644); err != nil {
 			fmt.Printf("创建临时文件失败: %v\n", err)
 			http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
 			return
 		}
 		defer os.Remove(tempFile)
 
-		// 3. 上传文件
+		// 上传文件
 		uploadResp, err := uploadFile(dsToken, tempFile)
 		if err != nil {
 			fmt.Printf("上传文件失败: %v\n", err)
@@ -310,20 +305,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Printf("文件上传成功: filename=%s, user_filename=%s\n", uploadResp.Filename, uploadResp.UserFilename)
 
-		// 4. 修改消息列表，保留历史记录，只将最后一条消息改为文件引用
-		lastMsg := openAIReq.Messages[len(openAIReq.Messages)-1]
+		// 更新最后一条消息为文件引用
 		openAIReq.Messages[len(openAIReq.Messages)-1] = Message{
 			Role:    lastMsg.Role,
 			Content: fmt.Sprintf("Please review the attached file: %s", uploadResp.UserFilename),
 		}
 
-		// 5. 添加文件源信息
+		// 添加文件源信息
 		sources := []map[string]interface{}{
 			{
 				"source_type":   "user_file",
 				"filename":      uploadResp.Filename,
 				"user_filename": uploadResp.UserFilename,
-				"size_bytes":    len(fileContent.String()),
+				"size_bytes":    len(lastMsg.Content),
 			},
 		}
 		sourcesJSON, err := json.Marshal(sources)
@@ -345,35 +339,23 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Printf("聊天历史状态: chatJSON=%s, pastChatLength=%s\n", chatJSON, pastChatLength)
 
-		// 基本参数
+		// 按照官方URL格式设置参数
 		q.Add("page", "1")
 		q.Add("count", "10")
-		q.Add("safeSearch", "Off") // 改为 Off
-		q.Add("mkt", "en-US")      // 改为 en-US
+		q.Add("safeSearch", "Off")
+		q.Add("mkt", "en-US")
 		q.Add("enable_worklow_generation_ux", "true")
 		q.Add("domain", "youchat")
 		q.Add("use_personalization_extraction", "true")
-
-		// ID 相关参数
 		q.Add("queryTraceId", chatId)
 		q.Add("chatId", chatId)
 		q.Add("conversationTurnId", conversationTurnId)
-		q.Add("traceId", traceId)
-		fmt.Printf("生成的 ID: chatId=%s, conversationTurnId=%s, traceId=%s\n", chatId, conversationTurnId, traceId)
-
-		// 聊天相关参数
 		q.Add("pastChatLength", pastChatLength)
 		q.Add("selectedChatMode", "custom")
+		q.Add("sources", string(sourcesJSON))
 		q.Add("selectedAiModel", mapModelName(openAIReq.Model))
-		fmt.Printf("模型信息: 原始模型=%s, 映射后模型=%s\n", openAIReq.Model, mapModelName(openAIReq.Model))
-
-		// 文件源信息
-		sourcesJSONStr := string(sourcesJSON)
-		q.Add("sources", sourcesJSONStr)
-		fmt.Printf("文件源信息: %s\n", sourcesJSONStr)
-
-		// 其他参数
 		q.Add("enable_agent_clarification_questions", "true")
+		q.Add("traceId", traceId)
 		q.Add("use_nested_youchat_updates", "true")
 		q.Add("q", fmt.Sprintf("Please review the attached file: %s", uploadResp.UserFilename))
 		q.Add("chat", chatJSON)
