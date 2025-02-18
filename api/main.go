@@ -24,11 +24,7 @@ type TokenCount struct {
 }
 
 const (
-<<<<<<< HEAD
 	MaxContextTokens = 2000 // 最大上下文 token 数
-=======
-	MaxContextTokens = 1800 // 最大上下文 token 数
->>>>>>> 7fe13bac751b08fddc524413792368daafb6e156
 )
 
 // YouChatResponse 定义了从 You.com API 接收的单个 token 的结构。
