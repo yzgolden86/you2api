@@ -24,7 +24,7 @@ type TokenCount struct {
 }
 
 const (
-	MaxContextTokens = 4000 // 最大上下文 token 数
+	MaxContextTokens = 2000 // 最大上下文 token 数
 )
 
 // YouChatResponse 定义了从 You.com API 接收的单个 token 的结构。
@@ -240,30 +240,80 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// 转换 system 消息为 user 消息
 	openAIReq.Messages = convertSystemToUser(openAIReq.Messages)
 
-	// 计算最后一条消息的 token 数（使用字符估算方法）
-	lastMessage := openAIReq.Messages[len(openAIReq.Messages)-1]
-	lastMessageTokens, err := countTokens([]Message{lastMessage})
-	if err != nil {
-		http.Error(w, "Failed to count tokens", http.StatusInternalServerError)
-		return
-	}
-
 	// 构建 You.com 聊天历史
 	var chatHistory []map[string]interface{}
-	for _, msg := range openAIReq.Messages[:len(openAIReq.Messages)-1] { // 不包含最后一条消息
-		chatMsg := map[string]interface{}{
-			"question": msg.Content,
-			"answer":   "",
+	var sources []map[string]interface{}
+	var lastAssistantMessage string
+
+	// 处理历史消息（不包括最后一条）
+	for _, msg := range openAIReq.Messages[:len(openAIReq.Messages)-1] {
+		if msg.Role == "user" {
+			tokens, err := countTokens([]Message{msg})
+			if err != nil {
+				http.Error(w, "Failed to count tokens", http.StatusInternalServerError)
+				return
+			}
+
+			if tokens > MaxContextTokens {
+				// 获取 nonce
+				nonceResp, err := getNonce(dsToken)
+				if err != nil {
+					fmt.Printf("获取 nonce 失败: %v\n", err)
+					http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
+					return
+				}
+
+				// 创建临时文件
+				tempFile := fmt.Sprintf("temp_%s.txt", nonceResp.Uuid)
+				if err := os.WriteFile(tempFile, []byte(msg.Content), 0644); err != nil {
+					fmt.Printf("创建临时文件失败: %v\n", err)
+					http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
+					return
+				}
+				defer os.Remove(tempFile)
+
+				// 上传文件
+				uploadResp, err := uploadFile(dsToken, tempFile)
+				if err != nil {
+					fmt.Printf("上传文件失败: %v\n", err)
+					http.Error(w, "Failed to upload file", http.StatusInternalServerError)
+					return
+				}
+
+				// 添加文件源信息
+				sources = append(sources, map[string]interface{}{
+					"source_type":   "user_file",
+					"filename":      uploadResp.Filename,
+					"user_filename": uploadResp.UserFilename,
+					"size_bytes":    len(msg.Content),
+				})
+
+				// 在历史记录中使用文件引用
+				chatHistory = append(chatHistory, map[string]interface{}{
+					"question": fmt.Sprintf("Please review the attached file: %s", uploadResp.UserFilename),
+					"answer":   "",
+				})
+			} else {
+				chatHistory = append(chatHistory, map[string]interface{}{
+					"question": msg.Content,
+					"answer":   "",
+				})
+			}
+		} else if msg.Role == "assistant" {
+			// 只保存最后一条 assistant 消息
+			lastAssistantMessage = msg.Content
 		}
-		// 如果是 assistant 的消息, 则交换 question 和 answer
-		if msg.Role == "assistant" {
-			chatMsg["question"] = ""
-			chatMsg["answer"] = msg.Content
-		}
-		chatHistory = append(chatHistory, chatMsg)
 	}
 
-	chatHistoryJSON, _ := json.Marshal(chatHistory) // 将聊天历史序列化为 JSON
+	// 如果有最后一条 assistant 消息，添加到历史记录中
+	if lastAssistantMessage != "" {
+		chatHistory = append(chatHistory, map[string]interface{}{
+			"question": "",
+			"answer":   lastAssistantMessage,
+		})
+	}
+
+	chatHistoryJSON, _ := json.Marshal(chatHistory)
 
 	// 创建 You.com API 请求
 	youReq, _ := http.NewRequest("GET", "https://you.com/api/streamingSearch", nil)
@@ -273,23 +323,48 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	conversationTurnId := uuid.New().String()
 	traceId := fmt.Sprintf("%s|%s|%s", chatId, conversationTurnId, time.Now().Format(time.RFC3339))
 
+	// 处理最后一条消息
+	lastMessage := openAIReq.Messages[len(openAIReq.Messages)-1]
+	lastMessageTokens, err := countTokens([]Message{lastMessage})
+	if err != nil {
+		http.Error(w, "Failed to count tokens", http.StatusInternalServerError)
+		return
+	}
+
+	// 构建查询参数
+	q := youReq.URL.Query()
+
+	// 设置基本参数
+	q.Add("page", "1")
+	q.Add("count", "10")
+	q.Add("safeSearch", "Off")
+	q.Add("mkt", "en-US")
+	q.Add("enable_worklow_generation_ux", "true")
+	q.Add("domain", "youchat")
+	q.Add("use_personalization_extraction", "true")
+	q.Add("queryTraceId", chatId)
+	q.Add("chatId", chatId)
+	q.Add("conversationTurnId", conversationTurnId)
+	q.Add("pastChatLength", fmt.Sprintf("%d", len(chatHistory)))
+	q.Add("selectedChatMode", "custom")
+	q.Add("selectedAiModel", mapModelName(openAIReq.Model))
+	q.Add("enable_agent_clarification_questions", "true")
+	q.Add("traceId", traceId)
+	q.Add("use_nested_youchat_updates", "true")
+
 	// 如果最后一条消息超过限制，使用文件上传
 	if lastMessageTokens > MaxContextTokens {
-		// 1. 获取 nonce
+		// 获取 nonce
 		nonceResp, err := getNonce(dsToken)
 		if err != nil {
 			fmt.Printf("获取 nonce 失败: %v\n", err)
 			http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
 			return
 		}
-		fmt.Printf("获取到 nonce: %s\n", nonceResp.Uuid)
 
-		// 4. 修改消息列表，保留历史记录，只将最后一条消息改为文件引用
-		lastMsg := openAIReq.Messages[len(openAIReq.Messages)-1]
-
-		// 创建临时文件，包含最后一条消息的内容
+		// 创建临时文件
 		tempFile := fmt.Sprintf("temp_%s.txt", nonceResp.Uuid)
-		if err := os.WriteFile(tempFile, []byte(lastMsg.Content), 0644); err != nil {
+		if err := os.WriteFile(tempFile, []byte(lastMessage.Content), 0644); err != nil {
 			fmt.Printf("创建临时文件失败: %v\n", err)
 			http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
 			return
@@ -305,197 +380,95 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 添加文件源信息
-		sources := []map[string]interface{}{
-			{
-				"source_type":   "user_file",
-				"filename":      uploadResp.Filename,
-				"user_filename": uploadResp.UserFilename,
-				"size_bytes":    len(lastMsg.Content),
-			},
-		}
-		sourcesJSON, err := json.Marshal(sources)
-		if err != nil {
-			fmt.Printf("序列化 sources 失败: %v\n", err)
-			http.Error(w, "Failed to marshal sources", http.StatusInternalServerError)
-			return
-		}
+		sources = append(sources, map[string]interface{}{
+			"source_type":   "user_file",
+			"filename":      uploadResp.Filename,
+			"user_filename": uploadResp.UserFilename,
+			"size_bytes":    len(lastMessage.Content),
+		})
 
-		// 更新查询参数
-		q := youReq.URL.Query()
-
-		// 如果是第一次聊天（没有历史记录），使用空数组
-		chatJSON := "[]"
-		pastChatLength := "0"
-		if len(chatHistory) > 0 {
-			chatJSON = string(chatHistoryJSON)
-			pastChatLength = fmt.Sprintf("%d", len(chatHistory))
-		}
-
-		// 按照官方URL格式设置参数
-		q.Add("page", "1")
-		q.Add("count", "10")
-		q.Add("safeSearch", "Off")
-		q.Add("mkt", "en-US")
-		q.Add("enable_worklow_generation_ux", "true")
-		q.Add("domain", "youchat")
-		q.Add("use_personalization_extraction", "true")
-		q.Add("queryTraceId", chatId)
-		q.Add("chatId", chatId)
-		q.Add("conversationTurnId", conversationTurnId)
-		q.Add("pastChatLength", pastChatLength)
-		q.Add("selectedChatMode", "custom")
+		// 添加 sources 参数
+		sourcesJSON, _ := json.Marshal(sources)
 		q.Add("sources", string(sourcesJSON))
-		q.Add("selectedAiModel", mapModelName(openAIReq.Model))
-		q.Add("enable_agent_clarification_questions", "true")
-		q.Add("traceId", traceId)
-		q.Add("use_nested_youchat_updates", "true")
+
+		// 使用文件引用作为查询
 		q.Add("q", fmt.Sprintf("Please review the attached file: %s", uploadResp.UserFilename))
-		q.Add("chat", chatJSON)
-
-		youReq.URL.RawQuery = q.Encode()
-
-		fmt.Printf("\n=== 完整请求信息 ===\n")
-		fmt.Printf("请求 URL: %s\n", youReq.URL.String())
-		fmt.Printf("请求头:\n")
-		for key, values := range youReq.Header {
-			fmt.Printf("%s: %v\n", key, values)
-		}
-
-		// 设置请求头
-		youReq.Header = http.Header{
-			"sec-ch-ua-platform":         {"Windows"},
-			"Cache-Control":              {"no-cache"},
-			"sec-ch-ua":                  {`"Not(A:Brand";v="99", "Microsoft Edge";v="133", "Chromium";v="133"`},
-			"sec-ch-ua-bitness":          {"64"},
-			"sec-ch-ua-model":            {""},
-			"sec-ch-ua-mobile":           {"?0"},
-			"sec-ch-ua-arch":             {"x86"},
-			"sec-ch-ua-full-version":     {"133.0.3065.39"},
-			"Accept":                     {"text/event-stream"},
-			"User-Agent":                 {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0"},
-			"sec-ch-ua-platform-version": {"19.0.0"},
-			"Sec-Fetch-Site":             {"same-origin"},
-			"Sec-Fetch-Mode":             {"cors"},
-			"Sec-Fetch-Dest":             {"empty"},
-			"Host":                       {"you.com"},
-		}
-
-		// 设置 Cookie
-		cookies := getCookies(dsToken)
-		var cookieStrings []string
-		for name, value := range cookies {
-			cookieStrings = append(cookieStrings, fmt.Sprintf("%s=%s", name, value))
-		}
-		youReq.Header.Add("Cookie", strings.Join(cookieStrings, ";"))
-		fmt.Printf("Cookie: %s\n", strings.Join(cookieStrings, ";"))
-		fmt.Printf("===================\n\n")
-
-		// 发送请求并获取响应
-		client := &http.Client{}
-		resp, err := client.Do(youReq)
-		if err != nil {
-			fmt.Printf("发送请求失败: %v\n", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer resp.Body.Close()
-
-		// 打印响应状态码
-		fmt.Printf("响应状态码: %d\n", resp.StatusCode)
-
-		// 如果状态码不是 200，打印响应内容
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			fmt.Printf("错误响应内容: %s\n", string(body))
-			http.Error(w, fmt.Sprintf("API returned status %d", resp.StatusCode), resp.StatusCode)
-			return
-		}
-
-		// 根据 OpenAI 请求的 stream 参数选择处理函数
-		if !openAIReq.Stream {
-			handleNonStreamingResponse(w, youReq) // 处理非流式响应
-			return
-		}
-
-		handleStreamingResponse(w, youReq) // 处理流式响应
 	} else {
-		// 构建常规查询参数
-		q := youReq.URL.Query()
-
-		// 如果是第一次聊天（没有历史记录），使用空数组
-		chatJSON := "[]"
-		pastChatLength := "0"
-		if len(chatHistory) > 0 {
-			chatJSON = string(chatHistoryJSON)
-			pastChatLength = fmt.Sprintf("%d", len(chatHistory))
+		// 如果有之前上传的文件，添加 sources
+		if len(sources) > 0 {
+			sourcesJSON, _ := json.Marshal(sources)
+			q.Add("sources", string(sourcesJSON))
 		}
-
-		// 按照官方URL格式设置参数
-		q.Add("page", "1")
-		q.Add("count", "10")
-		q.Add("safeSearch", "Off")
-		q.Add("mkt", "en-US")
-		q.Add("enable_worklow_generation_ux", "true")
-		q.Add("domain", "youchat")
-		q.Add("use_personalization_extraction", "true")
-		q.Add("queryTraceId", chatId)
-		q.Add("chatId", chatId)
-		q.Add("conversationTurnId", conversationTurnId)
-		q.Add("pastChatLength", pastChatLength)
-		q.Add("selectedChatMode", "custom")
-		q.Add("selectedAiModel", mapModelName(openAIReq.Model))
-		q.Add("enable_agent_clarification_questions", "true")
-		q.Add("traceId", traceId)
-		q.Add("use_nested_youchat_updates", "true")
-		q.Add("q", openAIReq.Messages[len(openAIReq.Messages)-1].Content)
-		q.Add("chat", chatJSON)
-
-		youReq.URL.RawQuery = q.Encode()
-
-		fmt.Printf("\n=== 完整请求信息 ===\n")
-		fmt.Printf("请求 URL: %s\n", youReq.URL.String())
-		fmt.Printf("请求头:\n")
-		for key, values := range youReq.Header {
-			fmt.Printf("%s: %v\n", key, values)
-		}
-
-		// 设置请求头
-		youReq.Header = http.Header{
-			"sec-ch-ua-platform":         {"Windows"},
-			"Cache-Control":              {"no-cache"},
-			"sec-ch-ua":                  {`"Not(A:Brand";v="99", "Microsoft Edge";v="133", "Chromium";v="133"`},
-			"sec-ch-ua-bitness":          {"64"},
-			"sec-ch-ua-model":            {""},
-			"sec-ch-ua-mobile":           {"?0"},
-			"sec-ch-ua-arch":             {"x86"},
-			"sec-ch-ua-full-version":     {"133.0.3065.39"},
-			"Accept":                     {"text/event-stream"},
-			"User-Agent":                 {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0"},
-			"sec-ch-ua-platform-version": {"19.0.0"},
-			"Sec-Fetch-Site":             {"same-origin"},
-			"Sec-Fetch-Mode":             {"cors"},
-			"Sec-Fetch-Dest":             {"empty"},
-			"Host":                       {"you.com"},
-		}
-
-		// 设置 Cookie
-		cookies := getCookies(dsToken)
-		var cookieStrings []string
-		for name, value := range cookies {
-			cookieStrings = append(cookieStrings, fmt.Sprintf("%s=%s", name, value))
-		}
-		youReq.Header.Add("Cookie", strings.Join(cookieStrings, ";"))
-		fmt.Printf("Cookie: %s\n", strings.Join(cookieStrings, ";"))
-		fmt.Printf("===================\n\n")
-
-		// 根据 OpenAI 请求的 stream 参数选择处理函数
-		if !openAIReq.Stream {
-			handleNonStreamingResponse(w, youReq) // 处理非流式响应
-			return
-		}
-
-		handleStreamingResponse(w, youReq) // 处理流式响应
+		q.Add("q", lastMessage.Content)
 	}
+
+	q.Add("chat", string(chatHistoryJSON))
+	youReq.URL.RawQuery = q.Encode()
+
+	fmt.Printf("\n=== 完整请求信息 ===\n")
+	fmt.Printf("请求 URL: %s\n", youReq.URL.String())
+	fmt.Printf("请求头:\n")
+	for key, values := range youReq.Header {
+		fmt.Printf("%s: %v\n", key, values)
+	}
+
+	// 设置请求头
+	youReq.Header = http.Header{
+		"sec-ch-ua-platform":         {"Windows"},
+		"Cache-Control":              {"no-cache"},
+		"sec-ch-ua":                  {`"Not(A:Brand";v="99", "Microsoft Edge";v="133", "Chromium";v="133"`},
+		"sec-ch-ua-bitness":          {"64"},
+		"sec-ch-ua-model":            {""},
+		"sec-ch-ua-mobile":           {"?0"},
+		"sec-ch-ua-arch":             {"x86"},
+		"sec-ch-ua-full-version":     {"133.0.3065.39"},
+		"Accept":                     {"text/event-stream"},
+		"User-Agent":                 {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0"},
+		"sec-ch-ua-platform-version": {"19.0.0"},
+		"Sec-Fetch-Site":             {"same-origin"},
+		"Sec-Fetch-Mode":             {"cors"},
+		"Sec-Fetch-Dest":             {"empty"},
+		"Host":                       {"you.com"},
+	}
+
+	// 设置 Cookie
+	cookies := getCookies(dsToken)
+	var cookieStrings []string
+	for name, value := range cookies {
+		cookieStrings = append(cookieStrings, fmt.Sprintf("%s=%s", name, value))
+	}
+	youReq.Header.Add("Cookie", strings.Join(cookieStrings, ";"))
+	fmt.Printf("Cookie: %s\n", strings.Join(cookieStrings, ";"))
+	fmt.Printf("===================\n\n")
+
+	// 发送请求并获取响应
+	client := &http.Client{}
+	resp, err := client.Do(youReq)
+	if err != nil {
+		fmt.Printf("发送请求失败: %v\n", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	// 打印响应状态码
+	fmt.Printf("响应状态码: %d\n", resp.StatusCode)
+
+	// 如果状态码不是 200，打印响应内容
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Printf("错误响应内容: %s\n", string(body))
+		http.Error(w, fmt.Sprintf("API returned status %d", resp.StatusCode), resp.StatusCode)
+		return
+	}
+
+	// 根据 OpenAI 请求的 stream 参数选择处理函数
+	if !openAIReq.Stream {
+		handleNonStreamingResponse(w, youReq) // 处理非流式响应
+		return
+	}
+
+	handleStreamingResponse(w, youReq) // 处理流式响应
 }
 
 // getCookies 根据提供的 DS token 生成所需的 Cookie。
@@ -707,7 +680,7 @@ func countTokens(messages []Message) (int, error) {
 		}
 
 		// 计算 tokens：英文字符 * 0.3 + 中文字符 * 0.6
-		tokens := int(float64(englishCount)*0.3 + float64(chineseCount)*0.6)
+		tokens := int(float64(englishCount)*0.3 + float64(chineseCount)*1)
 
 		// 加上角色名的 token（约 2 个）
 		totalTokens += tokens + 2
