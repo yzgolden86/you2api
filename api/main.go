@@ -245,90 +245,83 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// 构建 You.com 聊天历史
 	var chatHistory []map[string]interface{}
 	var sources []map[string]interface{}
+	var lastUserMessage string
+	var lastAssistantMessage string
 
-	// 处理历史消息（不包括最后一条）
-	for i := 0; i < len(openAIReq.Messages)-1; i += 2 {
-		if i+1 < len(openAIReq.Messages) {
-			userMsg := openAIReq.Messages[i]
-			assistantMsg := openAIReq.Messages[i+1]
+	// 处理历史消息
+	for i := 0; i < len(openAIReq.Messages); i++ {
+		msg := openAIReq.Messages[i]
 
-			if userMsg.Role == "user" && assistantMsg.Role == "assistant" {
-				// 获取 nonce
-				nonceResp, err := getNonce(dsToken)
-				if err != nil {
-					fmt.Printf("获取 nonce 失败: %v\n", err)
-					http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
-					return
-				}
+		if msg.Role == "user" {
+			lastUserMessage = msg.Content
+		} else if msg.Role == "assistant" {
+			lastAssistantMessage = msg.Content
 
-				// 创建临时文件
-				tempFile := fmt.Sprintf("temp_%s.txt", nonceResp.Uuid)
-				if err := os.WriteFile(tempFile, []byte(userMsg.Content), 0644); err != nil {
-					fmt.Printf("创建临时文件失败: %v\n", err)
-					http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
-					return
-				}
-				defer os.Remove(tempFile)
-
-				// 上传文件
-				uploadResp, err := uploadFile(dsToken, tempFile)
-				if err != nil {
-					fmt.Printf("上传文件失败: %v\n", err)
-					http.Error(w, "Failed to upload file", http.StatusInternalServerError)
-					return
-				}
-
-				// 添加文件源信息
-				sources = append(sources, map[string]interface{}{
-					"source_type":   "user_file",
-					"filename":      uploadResp.Filename,
-					"user_filename": uploadResp.UserFilename,
-					"size_bytes":    len(userMsg.Content),
-				})
-
-				// 获取 nonce for assistant message
-				nonceRespAssistant, err := getNonce(dsToken)
-				if err != nil {
-					fmt.Printf("获取 nonce 失败: %v\n", err)
-					http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
-					return
-				}
-
-				// 创建临时文件
-				tempFileAssistant := fmt.Sprintf("temp_%s.txt", nonceRespAssistant.Uuid)
-				if err := os.WriteFile(tempFileAssistant, []byte(assistantMsg.Content), 0644); err != nil {
-					fmt.Printf("创建临时文件失败: %v\n", err)
-					http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
-					return
-				}
-				defer os.Remove(tempFileAssistant)
-
-				// 上传文件
-				uploadRespAssistant, err := uploadFile(dsToken, tempFileAssistant)
-				if err != nil {
-					fmt.Printf("上传文件失败: %v\n", err)
-					http.Error(w, "Failed to upload file", http.StatusInternalServerError)
-					return
-				}
-
-				// 添加文件源信息
-				sources = append(sources, map[string]interface{}{
-					"source_type":   "user_file",
-					"filename":      uploadRespAssistant.Filename,
-					"user_filename": uploadRespAssistant.UserFilename,
-					"size_bytes":    len(assistantMsg.Content),
-				})
-
-				// 在历史记录中使用文件引用
+			// 当我们找到一个assistant消息，将其与前面最近的user消息配对
+			if lastUserMessage != "" {
+				// 添加一条完整的问答对
 				chatHistory = append(chatHistory, map[string]interface{}{
-					"question": fmt.Sprintf("Please review the attached file: %s", uploadResp.UserFilename),
-					"answer":   fmt.Sprintf("Please review the attached file: %s", uploadRespAssistant.UserFilename),
+					"question": lastUserMessage,
+					"answer":   lastAssistantMessage,
 				})
+
+				// 重置消息，防止重复添加
+				lastUserMessage = ""
+				lastAssistantMessage = ""
 			}
 		}
 	}
 
+	// 如果还有未配对的用户消息（最后一条），将其添加到历史记录中
+	if lastUserMessage != "" {
+		chatHistory = append(chatHistory, map[string]interface{}{
+			"question": lastUserMessage,
+			"answer":   "",
+		})
+	}
+
+	// 将聊天历史转换为JSON
 	chatHistoryJSON, _ := json.Marshal(chatHistory)
+
+	// 使用文件上传方式处理所有历史消息
+	var chatFileURL string
+	if len(chatHistory) > 0 {
+		// 获取 nonce
+		nonceResp, err := getNonce(dsToken)
+		if err != nil {
+			fmt.Printf("获取历史消息nonce失败: %v\n", err)
+			http.Error(w, "Failed to get nonce for chat history", http.StatusInternalServerError)
+			return
+		}
+
+		// 创建临时文件存储历史消息
+		tempChatFile := fmt.Sprintf("temp_chat_%s.txt", nonceResp.Uuid)
+		if err := os.WriteFile(tempChatFile, chatHistoryJSON, 0644); err != nil {
+			fmt.Printf("创建历史消息临时文件失败: %v\n", err)
+			http.Error(w, "Failed to create temp file for chat history", http.StatusInternalServerError)
+			return
+		}
+		defer os.Remove(tempChatFile)
+
+		// 上传历史消息文件
+		uploadChatResp, err := uploadFile(dsToken, tempChatFile)
+		if err != nil {
+			fmt.Printf("上传历史消息文件失败: %v\n", err)
+			http.Error(w, "Failed to upload chat history file", http.StatusInternalServerError)
+			return
+		}
+
+		// 添加历史消息文件源信息
+		sources = append(sources, map[string]interface{}{
+			"source_type":   "chat_history_file",
+			"filename":      uploadChatResp.Filename,
+			"user_filename": uploadChatResp.UserFilename,
+			"size_bytes":    len(string(chatHistoryJSON)),
+		})
+
+		// 保存历史消息文件URL
+		chatFileURL = uploadChatResp.Filename
+	}
 
 	// 创建 You.com API 请求
 	youReq, _ := http.NewRequest("GET", "https://you.com/api/streamingSearch", nil)
@@ -340,39 +333,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	// 处理最后一条消息
 	lastMessage := openAIReq.Messages[len(openAIReq.Messages)-1]
-
-	// 获取 nonce
-	nonceResp, err := getNonce(dsToken)
+	lastMessageTokens, err := countTokens([]Message{lastMessage})
 	if err != nil {
-		fmt.Printf("获取 nonce 失败: %v\n", err)
-		http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
+		http.Error(w, "Failed to count tokens", http.StatusInternalServerError)
 		return
 	}
-
-	// 创建临时文件
-	tempFile := fmt.Sprintf("temp_%s.txt", nonceResp.Uuid)
-	if err := os.WriteFile(tempFile, []byte(lastMessage.Content), 0644); err != nil {
-		fmt.Printf("创建临时文件失败: %v\n", err)
-		http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
-		return
-	}
-	defer os.Remove(tempFile)
-
-	// 上传文件
-	uploadResp, err := uploadFile(dsToken, tempFile)
-	if err != nil {
-		fmt.Printf("上传文件失败: %v\n", err)
-		http.Error(w, "Failed to upload file", http.StatusInternalServerError)
-		return
-	}
-
-	// 添加文件源信息
-	sources = append(sources, map[string]interface{}{
-		"source_type":   "user_file",
-		"filename":      uploadResp.Filename,
-		"user_filename": uploadResp.UserFilename,
-		"size_bytes":    len(lastMessage.Content),
-	})
 
 	// 构建查询参数
 	q := youReq.URL.Query()
@@ -395,13 +360,61 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	q.Add("traceId", traceId)
 	q.Add("use_nested_youchat_updates", "true")
 
-	// 添加 sources 参数
-	sourcesJSON, _ := json.Marshal(sources)
-	q.Add("sources", string(sourcesJSON))
+	// 如果有聊天历史文件，添加到查询参数
+	if chatFileURL != "" {
+		q.Add("chat", chatFileURL)
+	}
 
-	// 使用文件引用作为查询
-	q.Add("q", fmt.Sprintf("Please review the attached file: %s", uploadResp.UserFilename))
-	q.Add("chat", string(chatHistoryJSON))
+	// 如果最后一条消息超过限制，使用文件上传
+	if lastMessageTokens > MaxContextTokens {
+		// 获取 nonce
+		nonceResp, err := getNonce(dsToken)
+		if err != nil {
+			fmt.Printf("获取 nonce 失败: %v\n", err)
+			http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
+			return
+		}
+
+		// 创建临时文件
+		tempFile := fmt.Sprintf("temp_%s.txt", nonceResp.Uuid)
+		if err := os.WriteFile(tempFile, []byte(lastMessage.Content), 0644); err != nil {
+			fmt.Printf("创建临时文件失败: %v\n", err)
+			http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
+			return
+		}
+		defer os.Remove(tempFile)
+
+		// 上传文件
+		uploadResp, err := uploadFile(dsToken, tempFile)
+		if err != nil {
+			fmt.Printf("上传文件失败: %v\n", err)
+			http.Error(w, "Failed to upload file", http.StatusInternalServerError)
+			return
+		}
+
+		// 添加文件源信息
+		sources = append(sources, map[string]interface{}{
+			"source_type":   "user_file",
+			"filename":      uploadResp.Filename,
+			"user_filename": uploadResp.UserFilename,
+			"size_bytes":    len(lastMessage.Content),
+		})
+
+		// 添加 sources 参数
+		sourcesJSON, _ := json.Marshal(sources)
+		q.Add("sources", string(sourcesJSON))
+
+		// 使用文件引用作为查询
+		q.Add("q", fmt.Sprintf("Please review the attached file: %s", uploadResp.UserFilename))
+	} else {
+		// 如果有之前上传的文件，添加 sources
+		if len(sources) > 0 {
+			sourcesJSON, _ := json.Marshal(sources)
+			q.Add("sources", string(sourcesJSON))
+		}
+		q.Add("q", lastMessage.Content)
+	}
+
 	youReq.URL.RawQuery = q.Encode()
 
 	fmt.Printf("\n=== 完整请求信息 ===\n")
@@ -659,6 +672,32 @@ func uploadFile(dsToken, filePath string) (*UploadResponse, error) {
 		return nil, err
 	}
 	return &uploadResp, nil
+}
+
+// 计算消息的 token 数（使用字符估算方法）
+func countTokens(messages []Message) (int, error) {
+	totalTokens := 0
+	for _, msg := range messages {
+		content := msg.Content
+		englishCount := 0
+		chineseCount := 0
+
+		// 遍历每个字符
+		for _, r := range content {
+			if r <= 127 { // ASCII 字符（英文和符号）
+				englishCount++
+			} else { // 非 ASCII 字符（中文等）
+				chineseCount++
+			}
+		}
+
+		// 计算 tokens：英文字符 * 0.3 + 中文字符 * 0.6
+		tokens := int(float64(englishCount)*0.3 + float64(chineseCount)*1)
+
+		// 加上角色名的 token（约 2 个）
+		totalTokens += tokens + 2
+	}
+	return totalTokens, nil
 }
 
 // 将 system 消息转换为第一条 user 消息
