@@ -259,82 +259,81 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	var sources []map[string]interface{}
 
 	// 处理历史消息（不包括最后一条）
-	var currentQuestion string
-	var currentAnswer string
+	for i := 0; i < len(openAIReq.Messages)-1; i += 2 {
+		// 确保用户-助手消息成对处理
+		if i+1 < len(openAIReq.Messages)-1 &&
+			openAIReq.Messages[i].Role == "user" &&
+			openAIReq.Messages[i+1].Role == "assistant" {
 
-	for i, msg := range openAIReq.Messages[:len(openAIReq.Messages)-1] {
-		if msg.Role == "user" {
-			currentQuestion = msg.Content
-			currentAnswer = "" // 初始化当前答案为空
+			userMsg := openAIReq.Messages[i].Content
+			assistantMsg := openAIReq.Messages[i+1].Content
 
-			// 如果下一条消息是助手消息，则跳过当前循环，等待处理助手消息
-			if i+1 < len(openAIReq.Messages)-1 && openAIReq.Messages[i+1].Role == "assistant" {
-				continue
-			}
+			// 计算用户问题的token数
+			questionTokenCount, _ := countTokens([]Message{{Role: "user", Content: userMsg}})
 
-			// 如果没有对应的助手消息，则创建一个问答对
-			// 获取 nonce 用于上传文件 - 不再需要nonce
-			_, err := getNonce(dsToken) // 仍然调用以保持API流程，但不使用返回值
+			// 处理助手回答消息（始终通过文件上传）
+			var assistantUploadResp *UploadResponse
+			var err error
+
+			// 获取nonce用于上传助手消息
+			_, err = getNonce(dsToken)
 			if err != nil {
-				fmt.Printf("获取 nonce 失败: %v\n", err)
+				fmt.Printf("获取助手消息nonce失败: %v\n", err)
 				http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
 				return
 			}
 
-			// 创建用户消息临时文件并上传，使用短文件名
-			shortFileName := generateShortFileName()
-			userTempFile := shortFileName + ".txt"
+			// 创建助手消息临时文件并上传
+			assistantShortFileName := generateShortFileName()
+			assistantTempFile := assistantShortFileName + ".txt"
 
-			// 确保使用UTF-8编码写入文件，添加BOM标记
-			if err := os.WriteFile(userTempFile, addUTF8BOM(currentQuestion), 0644); err != nil {
-				fmt.Printf("创建用户临时文件失败: %v\n", err)
+			// 写入文件
+			if err := os.WriteFile(assistantTempFile, addUTF8BOM(assistantMsg), 0644); err != nil {
+				fmt.Printf("创建助手临时文件失败: %v\n", err)
 				http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
 				return
 			}
-			defer os.Remove(userTempFile)
+			defer os.Remove(assistantTempFile)
 
-			// 上传用户消息文件
-			userUploadResp, err := uploadFile(dsToken, userTempFile)
+			// 上传助手消息文件
+			assistantUploadResp, err = uploadFile(dsToken, assistantTempFile)
 			if err != nil {
-				fmt.Printf("上传用户文件失败: %v\n", err)
+				fmt.Printf("上传助手文件失败: %v\n", err)
 				http.Error(w, "Failed to upload file", http.StatusInternalServerError)
 				return
 			}
 
-			// 添加用户文件源信息
+			// 添加助手文件源信息
 			sources = append(sources, map[string]interface{}{
 				"source_type":   "user_file",
-				"filename":      userUploadResp.Filename,
-				"user_filename": userUploadResp.UserFilename,
-				"size_bytes":    len(currentQuestion),
+				"filename":      assistantUploadResp.Filename,
+				"user_filename": assistantUploadResp.UserFilename,
+				"size_bytes":    len(assistantMsg),
 			})
 
-			// 在历史记录中添加问答对
-			chatHistory = append(chatHistory, ChatEntry{
-				Question: fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(userUploadResp.UserFilename, ".txt")),
-				Answer:   currentAnswer,
-			})
-		} else if msg.Role == "assistant" {
-			currentAnswer = msg.Content
-
-			// 获取上一条用户消息
-			if i > 0 && openAIReq.Messages[i-1].Role == "user" {
-				currentQuestion = openAIReq.Messages[i-1].Content
-
-				// 获取 nonce 用于上传用户消息文件 - 不再需要nonce
-				_, err := getNonce(dsToken) // 仍然调用以保持API流程，但不使用返回值
+			// 根据问题长度决定问题的处理方式
+			if questionTokenCount < 30 {
+				// 短问题直接使用文字
+				chatHistory = append(chatHistory, ChatEntry{
+					Question: userMsg,
+					Answer:   fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(assistantUploadResp.UserFilename, ".txt")),
+				})
+			} else {
+				// 长问题需要上传文件
+				// 获取nonce用于上传用户消息
+				_, err = getNonce(dsToken)
 				if err != nil {
-					fmt.Printf("获取用户消息 nonce 失败: %v\n", err)
+					fmt.Printf("获取用户消息nonce失败: %v\n", err)
 					http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
 					return
 				}
 
-				// 创建用户消息临时文件并上传，使用短文件名
+				// 创建用户消息临时文件并上传
 				userShortFileName := generateShortFileName()
 				userTempFile := userShortFileName + ".txt"
 
-				// 确保使用UTF-8编码写入文件，添加BOM标记
-				if err := os.WriteFile(userTempFile, addUTF8BOM(currentQuestion), 0644); err != nil {
+				// 写入文件
+				if err := os.WriteFile(userTempFile, addUTF8BOM(userMsg), 0644); err != nil {
 					fmt.Printf("创建用户临时文件失败: %v\n", err)
 					http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
 					return
@@ -354,49 +353,70 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 					"source_type":   "user_file",
 					"filename":      userUploadResp.Filename,
 					"user_filename": userUploadResp.UserFilename,
-					"size_bytes":    len(currentQuestion),
+					"size_bytes":    len(userMsg),
 				})
 
-				// 获取 nonce 用于上传助手消息文件 - 不再需要nonce
-				_, err = getNonce(dsToken) // 仍然调用以保持API流程，但不使用返回值
+				// 添加问答对到历史记录
+				chatHistory = append(chatHistory, ChatEntry{
+					Question: fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(userUploadResp.UserFilename, ".txt")),
+					Answer:   fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(assistantUploadResp.UserFilename, ".txt")),
+				})
+			}
+		} else if openAIReq.Messages[i].Role == "user" {
+			// 处理没有配对助手回复的用户消息
+			userMsg := openAIReq.Messages[i].Content
+
+			// 计算用户问题的token数
+			questionTokenCount, _ := countTokens([]Message{{Role: "user", Content: userMsg}})
+
+			if questionTokenCount < 30 {
+				// 短问题直接使用文字
+				chatHistory = append(chatHistory, ChatEntry{
+					Question: userMsg,
+					Answer:   "",
+				})
+			} else {
+				// 长问题上传文件
+				// 获取nonce
+				_, err := getNonce(dsToken)
 				if err != nil {
-					fmt.Printf("获取助手消息 nonce 失败: %v\n", err)
+					fmt.Printf("获取nonce失败: %v\n", err)
 					http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
 					return
 				}
 
-				// 创建助手消息临时文件并上传，使用短文件名
-				assistantShortFileName := generateShortFileName()
-				assistantTempFile := assistantShortFileName + ".txt"
+				// 创建临时文件
+				shortFileName := generateShortFileName()
+				tempFile := shortFileName + ".txt"
 
-				// 确保使用UTF-8编码写入文件，添加BOM标记
-				if err := os.WriteFile(assistantTempFile, addUTF8BOM(currentAnswer), 0644); err != nil {
-					fmt.Printf("创建助手临时文件失败: %v\n", err)
+				// 写入文件
+				if err := os.WriteFile(tempFile, addUTF8BOM(userMsg), 0644); err != nil {
+					fmt.Printf("创建临时文件失败: %v\n", err)
 					http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
 					return
 				}
-				defer os.Remove(assistantTempFile)
+				defer os.Remove(tempFile)
 
-				// 上传助手消息文件
-				assistantUploadResp, err := uploadFile(dsToken, assistantTempFile)
+				// 上传文件
+				uploadResp, err := uploadFile(dsToken, tempFile)
 				if err != nil {
-					fmt.Printf("上传助手文件失败: %v\n", err)
+					fmt.Printf("上传文件失败: %v\n", err)
 					http.Error(w, "Failed to upload file", http.StatusInternalServerError)
 					return
 				}
 
-				// 添加助手文件源信息
+				// 添加源信息
 				sources = append(sources, map[string]interface{}{
 					"source_type":   "user_file",
-					"filename":      assistantUploadResp.Filename,
-					"user_filename": assistantUploadResp.UserFilename,
-					"size_bytes":    len(currentAnswer),
+					"filename":      uploadResp.Filename,
+					"user_filename": uploadResp.UserFilename,
+					"size_bytes":    len(userMsg),
 				})
 
-				// 在历史记录中添加问答对
+				// 添加问答对
 				chatHistory = append(chatHistory, ChatEntry{
-					Question: fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(userUploadResp.UserFilename, ".txt")),
-					Answer:   fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(assistantUploadResp.UserFilename, ".txt")),
+					Question: fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(uploadResp.UserFilename, ".txt")),
+					Answer:   "",
 				})
 			}
 		}
