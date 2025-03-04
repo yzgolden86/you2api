@@ -254,22 +254,41 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// 转换 system 消息为 user 消息
 	openAIReq.Messages = convertSystemToUser(openAIReq.Messages)
 
+	// 打印OpenAI消息
+	fmt.Printf("\n=== 接收到的OpenAI消息 ===\n")
+	for i, msg := range openAIReq.Messages {
+		fmt.Printf("消息 %d: 角色=%s, 内容=%s\n", i+1, msg.Role, msg.Content)
+	}
+	fmt.Printf("===================\n\n")
+
 	// 构建 You.com 聊天历史
 	var chatHistory []ChatEntry
 	var sources []map[string]interface{}
 
-	// 处理历史消息（不包括最后一条）
-	for i := 0; i < len(openAIReq.Messages)-1; i += 2 {
-		// 确保用户-助手消息成对处理
-		if i+1 < len(openAIReq.Messages)-1 &&
-			openAIReq.Messages[i].Role == "user" &&
-			openAIReq.Messages[i+1].Role == "assistant" {
+	// 计算消息回合数（不包括最后一条）
+	var turnCount = len(openAIReq.Messages) / 2
+	fmt.Printf("消息回合数: %d\n", turnCount)
 
-			userMsg := openAIReq.Messages[i].Content
-			assistantMsg := openAIReq.Messages[i+1].Content
+	// 处理历史消息（不包括最后一条）
+	// 每次用户-助手消息对视为一个回合
+	for turnIndex := 0; turnIndex < turnCount; turnIndex++ {
+		// 获取当前回合的消息索引
+		userMsgIndex := turnIndex * 2
+		assistantMsgIndex := userMsgIndex + 1
+
+		// 确保索引有效且是正确的角色
+		if userMsgIndex < len(openAIReq.Messages)-1 && assistantMsgIndex < len(openAIReq.Messages)-1 &&
+			openAIReq.Messages[userMsgIndex].Role == "user" &&
+			openAIReq.Messages[assistantMsgIndex].Role == "assistant" {
+
+			fmt.Printf("处理第 %d 轮对话...\n", turnIndex+1)
+
+			userMsg := openAIReq.Messages[userMsgIndex].Content
+			assistantMsg := openAIReq.Messages[assistantMsgIndex].Content
 
 			// 计算用户问题的token数
 			questionTokenCount, _ := countTokens([]Message{{Role: "user", Content: userMsg}})
+			fmt.Printf("用户问题token数: %d\n", questionTokenCount)
 
 			// 处理助手回答消息（始终通过文件上传）
 			var assistantUploadResp *UploadResponse
@@ -314,8 +333,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			// 根据问题长度决定问题的处理方式
 			if questionTokenCount < 30 {
 				// 短问题直接使用文字
+				fmt.Printf("使用文字形式添加短问题\n")
 				chatHistory = append(chatHistory, ChatEntry{
-					Question: userMsg,
+					Question: userMsg, // 直接使用文字内容
 					Answer:   fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(assistantUploadResp.UserFilename, ".txt")),
 				})
 			} else {
@@ -356,70 +376,24 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 					"size_bytes":    len(userMsg),
 				})
 
+				fmt.Printf("使用文件形式添加长问题\n")
 				// 添加问答对到历史记录
 				chatHistory = append(chatHistory, ChatEntry{
 					Question: fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(userUploadResp.UserFilename, ".txt")),
 					Answer:   fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(assistantUploadResp.UserFilename, ".txt")),
 				})
 			}
-		} else if openAIReq.Messages[i].Role == "user" {
-			// 处理没有配对助手回复的用户消息
-			userMsg := openAIReq.Messages[i].Content
-
-			// 计算用户问题的token数
-			questionTokenCount, _ := countTokens([]Message{{Role: "user", Content: userMsg}})
-
-			if questionTokenCount < 30 {
-				// 短问题直接使用文字
-				chatHistory = append(chatHistory, ChatEntry{
-					Question: userMsg,
-					Answer:   "",
-				})
-			} else {
-				// 长问题上传文件
-				// 获取nonce
-				_, err := getNonce(dsToken)
-				if err != nil {
-					fmt.Printf("获取nonce失败: %v\n", err)
-					http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
-					return
-				}
-
-				// 创建临时文件
-				shortFileName := generateShortFileName()
-				tempFile := shortFileName + ".txt"
-
-				// 写入文件
-				if err := os.WriteFile(tempFile, addUTF8BOM(userMsg), 0644); err != nil {
-					fmt.Printf("创建临时文件失败: %v\n", err)
-					http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
-					return
-				}
-				defer os.Remove(tempFile)
-
-				// 上传文件
-				uploadResp, err := uploadFile(dsToken, tempFile)
-				if err != nil {
-					fmt.Printf("上传文件失败: %v\n", err)
-					http.Error(w, "Failed to upload file", http.StatusInternalServerError)
-					return
-				}
-
-				// 添加源信息
-				sources = append(sources, map[string]interface{}{
-					"source_type":   "user_file",
-					"filename":      uploadResp.Filename,
-					"user_filename": uploadResp.UserFilename,
-					"size_bytes":    len(userMsg),
-				})
-
-				// 添加问答对
-				chatHistory = append(chatHistory, ChatEntry{
-					Question: fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(uploadResp.UserFilename, ".txt")),
-					Answer:   "",
-				})
-			}
+		} else {
+			fmt.Printf("跳过消息索引 %d，它不是有效的用户-助手对\n", userMsgIndex)
 		}
+	}
+
+	// 处理最后一条消息，它应该是用户消息
+	lastMessageIndex := len(openAIReq.Messages) - 1
+	if lastMessageIndex >= 0 && openAIReq.Messages[lastMessageIndex].Role == "user" {
+		fmt.Printf("处理最后一条用户消息...\n")
+	} else {
+		fmt.Printf("最后一条消息不是用户消息，跳过处理\n")
 	}
 
 	chatHistoryJSON, _ := json.Marshal(chatHistory)
@@ -516,6 +490,17 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	q.Add("chat", string(chatHistoryJSON))
 	youReq.URL.RawQuery = q.Encode()
+
+	// 添加调试信息
+	fmt.Printf("\n=== 聊天历史内容 ===\n")
+	fmt.Printf("历史条数: %d\n", len(chatHistory))
+	for i, entry := range chatHistory {
+		fmt.Printf("条目 %d:\n", i+1)
+		fmt.Printf("  问题: %s\n", entry.Question)
+		fmt.Printf("  回答: %s\n", entry.Answer)
+	}
+	fmt.Printf("chat参数内容: %s\n", string(chatHistoryJSON))
+	fmt.Printf("===================\n\n")
 
 	fmt.Printf("\n=== 完整请求信息 ===\n")
 	fmt.Printf("请求 URL: %s\n", youReq.URL.String())
