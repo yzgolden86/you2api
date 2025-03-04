@@ -290,9 +290,46 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				if questionTokenCount < 30 {
 					// 短问题直接使用文字
 					fmt.Printf("短问题直接使用文字\n")
+
+					// 上传助手回答文件（无论问题长短，回答都上传）
+					_, err := getNonce(dsToken)
+					if err != nil {
+						fmt.Printf("获取nonce失败: %v\n", err)
+						http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
+						return
+					}
+
+					// 创建助手回答临时文件
+					assistantShortFileName := generateShortFileName()
+					assistantTempFile := assistantShortFileName + ".txt"
+
+					if err := os.WriteFile(assistantTempFile, addUTF8BOM(assistantMsg.Content), 0644); err != nil {
+						fmt.Printf("创建助手回答文件失败: %v\n", err)
+						http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
+						return
+					}
+					defer os.Remove(assistantTempFile)
+
+					// 上传助手文件
+					assistantUploadResp, err := uploadFile(dsToken, assistantTempFile)
+					if err != nil {
+						fmt.Printf("上传助手文件失败: %v\n", err)
+						http.Error(w, "Failed to upload file", http.StatusInternalServerError)
+						return
+					}
+
+					// 添加助手文件源信息
+					sources = append(sources, map[string]interface{}{
+						"source_type":   "user_file",
+						"filename":      assistantUploadResp.Filename,
+						"user_filename": assistantUploadResp.UserFilename,
+						"size_bytes":    len(assistantMsg.Content),
+					})
+
+					// 短问题+上传的助手回答
 					chatHistory = append(chatHistory, ChatEntry{
 						Question: userContent,
-						Answer:   assistantMsg.Content,
+						Answer:   fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(assistantUploadResp.UserFilename, ".txt")),
 					})
 				} else {
 					// 长问题需要上传文件
