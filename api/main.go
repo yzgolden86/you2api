@@ -285,8 +285,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			shortFileName := generateShortFileName()
 			userTempFile := shortFileName + ".txt"
 
-			// 确保使用UTF-8编码写入文件
-			if err := os.WriteFile(userTempFile, []byte(currentQuestion), 0644); err != nil {
+			// 确保使用UTF-8编码写入文件，添加BOM标记
+			if err := os.WriteFile(userTempFile, addUTF8BOM(currentQuestion), 0644); err != nil {
 				fmt.Printf("创建用户临时文件失败: %v\n", err)
 				http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
 				return
@@ -333,8 +333,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				userShortFileName := generateShortFileName()
 				userTempFile := userShortFileName + ".txt"
 
-				// 确保使用UTF-8编码写入文件
-				if err := os.WriteFile(userTempFile, []byte(currentQuestion), 0644); err != nil {
+				// 确保使用UTF-8编码写入文件，添加BOM标记
+				if err := os.WriteFile(userTempFile, addUTF8BOM(currentQuestion), 0644); err != nil {
 					fmt.Printf("创建用户临时文件失败: %v\n", err)
 					http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
 					return
@@ -369,8 +369,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				assistantShortFileName := generateShortFileName()
 				assistantTempFile := assistantShortFileName + ".txt"
 
-				// 确保使用UTF-8编码写入文件
-				if err := os.WriteFile(assistantTempFile, []byte(currentAnswer), 0644); err != nil {
+				// 确保使用UTF-8编码写入文件，添加BOM标记
+				if err := os.WriteFile(assistantTempFile, addUTF8BOM(currentAnswer), 0644); err != nil {
 					fmt.Printf("创建助手临时文件失败: %v\n", err)
 					http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
 					return
@@ -455,8 +455,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		shortFileName := generateShortFileName()
 		tempFile := shortFileName + ".txt"
 
-		// 确保使用UTF-8编码写入文件
-		if err := os.WriteFile(tempFile, []byte(lastMessage.Content), 0644); err != nil {
+		// 确保使用UTF-8编码写入文件，添加BOM标记
+		if err := os.WriteFile(tempFile, addUTF8BOM(lastMessage.Content), 0644); err != nil {
 			fmt.Printf("创建临时文件失败: %v\n", err)
 			http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
 			return
@@ -823,4 +823,11 @@ func convertSystemToUser(messages []Message) []Message {
 	}
 
 	return newMessages
+}
+
+// 添加UTF-8 BOM标记的函数
+func addUTF8BOM(content string) []byte {
+	// UTF-8 BOM: EF BB BF
+	bom := []byte{0xEF, 0xBB, 0xBF}
+	return append(bom, []byte(content)...)
 }
