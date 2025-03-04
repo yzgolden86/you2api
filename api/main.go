@@ -174,6 +174,12 @@ type UploadResponse struct {
 // 定义最大查询长度
 const MaxQueryLength = 2000
 
+// ChatEntry 定义了聊天历史中的单个问答对的结构
+type ChatEntry struct {
+	Question string `json:"question"`
+	Answer   string `json:"answer"`
+}
+
 // Handler 是处理所有传入 HTTP 请求的主处理函数。
 func Handler(w http.ResponseWriter, r *http.Request) {
 	// 处理 /v1/models 请求（列出可用模型）
@@ -249,7 +255,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	openAIReq.Messages = convertSystemToUser(openAIReq.Messages)
 
 	// 构建 You.com 聊天历史
-	var chatHistory []map[string]interface{}
+	var chatHistory []ChatEntry
 	var sources []map[string]interface{}
 
 	// 处理历史消息（不包括最后一条）
@@ -304,9 +310,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			})
 
 			// 在历史记录中添加问答对
-			chatHistory = append(chatHistory, map[string]interface{}{
-				"question": fmt.Sprintf("Please review the attached file: %s", userUploadResp.UserFilename),
-				"answer":   currentAnswer,
+			chatHistory = append(chatHistory, ChatEntry{
+				Question: fmt.Sprintf("Please review the attached file: %s", userUploadResp.UserFilename),
+				Answer:   currentAnswer,
 			})
 		} else if msg.Role == "assistant" {
 			currentAnswer = msg.Content
@@ -388,9 +394,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 				})
 
 				// 在历史记录中添加问答对
-				chatHistory = append(chatHistory, map[string]interface{}{
-					"question": fmt.Sprintf("Please review the attached file: %s", userUploadResp.UserFilename),
-					"answer":   fmt.Sprintf("Please review the attached file: %s", assistantUploadResp.UserFilename),
+				chatHistory = append(chatHistory, ChatEntry{
+					Question: fmt.Sprintf("Please review the attached file: %s", userUploadResp.UserFilename),
+					Answer:   fmt.Sprintf("Please review the attached file: %s", assistantUploadResp.UserFilename),
 				})
 			}
 		}
