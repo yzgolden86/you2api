@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -15,6 +16,11 @@ import (
 
 	"github.com/google/uuid"
 )
+
+func init() {
+	// 初始化随机数生成器
+	rand.Seed(time.Now().UnixNano())
+}
 
 // TokenCount 定义了 token 计数的结构
 type TokenCount struct {
@@ -261,16 +267,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// 如果没有对应的助手消息，则创建一个问答对
-			// 获取 nonce 用于上传文件
-			nonceResp, err := getNonce(dsToken)
+			// 获取 nonce 用于上传文件 - 不再需要nonce
+			_, err := getNonce(dsToken) // 仍然调用以保持API流程，但不使用返回值
 			if err != nil {
 				fmt.Printf("获取 nonce 失败: %v\n", err)
 				http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
 				return
 			}
 
-			// 创建用户消息临时文件并上传
-			userTempFile := fmt.Sprintf("temp_user_%s.txt", nonceResp.Uuid)
+			// 创建用户消息临时文件并上传，使用短文件名
+			shortFileName := generateShortFileName()
+			userTempFile := shortFileName + ".txt"
+
+			// 确保使用UTF-8编码写入文件
 			if err := os.WriteFile(userTempFile, []byte(currentQuestion), 0644); err != nil {
 				fmt.Printf("创建用户临时文件失败: %v\n", err)
 				http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
@@ -306,16 +315,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			if i > 0 && openAIReq.Messages[i-1].Role == "user" {
 				currentQuestion = openAIReq.Messages[i-1].Content
 
-				// 获取 nonce 用于上传用户消息文件
-				userNonceResp, err := getNonce(dsToken)
+				// 获取 nonce 用于上传用户消息文件 - 不再需要nonce
+				_, err := getNonce(dsToken) // 仍然调用以保持API流程，但不使用返回值
 				if err != nil {
 					fmt.Printf("获取用户消息 nonce 失败: %v\n", err)
 					http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
 					return
 				}
 
-				// 创建用户消息临时文件并上传
-				userTempFile := fmt.Sprintf("temp_user_%s.txt", userNonceResp.Uuid)
+				// 创建用户消息临时文件并上传，使用短文件名
+				userShortFileName := generateShortFileName()
+				userTempFile := userShortFileName + ".txt"
+
+				// 确保使用UTF-8编码写入文件
 				if err := os.WriteFile(userTempFile, []byte(currentQuestion), 0644); err != nil {
 					fmt.Printf("创建用户临时文件失败: %v\n", err)
 					http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
@@ -339,16 +351,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 					"size_bytes":    len(currentQuestion),
 				})
 
-				// 获取 nonce 用于上传助手消息文件
-				assistantNonceResp, err := getNonce(dsToken)
+				// 获取 nonce 用于上传助手消息文件 - 不再需要nonce
+				_, err = getNonce(dsToken) // 仍然调用以保持API流程，但不使用返回值
 				if err != nil {
 					fmt.Printf("获取助手消息 nonce 失败: %v\n", err)
 					http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
 					return
 				}
 
-				// 创建助手消息临时文件并上传
-				assistantTempFile := fmt.Sprintf("temp_assistant_%s.txt", assistantNonceResp.Uuid)
+				// 创建助手消息临时文件并上传，使用短文件名
+				assistantShortFileName := generateShortFileName()
+				assistantTempFile := assistantShortFileName + ".txt"
+
+				// 确保使用UTF-8编码写入文件
 				if err := os.WriteFile(assistantTempFile, []byte(currentAnswer), 0644); err != nil {
 					fmt.Printf("创建助手临时文件失败: %v\n", err)
 					http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
@@ -422,16 +437,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	// 如果最后一条消息超过限制，使用文件上传
 	if lastMessageTokens > MaxContextTokens {
-		// 获取 nonce
-		nonceResp, err := getNonce(dsToken)
+		// 获取 nonce - 不再需要nonce
+		_, err := getNonce(dsToken) // 仍然调用以保持API流程，但不使用返回值
 		if err != nil {
 			fmt.Printf("获取 nonce 失败: %v\n", err)
 			http.Error(w, "Failed to get nonce", http.StatusInternalServerError)
 			return
 		}
 
-		// 创建临时文件
-		tempFile := fmt.Sprintf("temp_%s.txt", nonceResp.Uuid)
+		// 创建临时文件，使用短文件名
+		shortFileName := generateShortFileName()
+		tempFile := shortFileName + ".txt"
+
+		// 确保使用UTF-8编码写入文件
 		if err := os.WriteFile(tempFile, []byte(lastMessage.Content), 0644); err != nil {
 			fmt.Printf("创建临时文件失败: %v\n", err)
 			http.Error(w, "Failed to create temp file", http.StatusInternalServerError)
@@ -691,6 +709,17 @@ func getNonce(dsToken string) (*NonceResponse, error) {
 	return &NonceResponse{
 		Uuid: strings.TrimSpace(string(body)),
 	}, nil
+}
+
+// 生成短文件名
+func generateShortFileName() string {
+	// 生成10位随机字母数字字符串
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	result := make([]byte, 10)
+	for i := range result {
+		result[i] = charset[rand.Intn(len(charset))]
+	}
+	return string(result)
 }
 
 // 上传文件
