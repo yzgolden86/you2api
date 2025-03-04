@@ -311,7 +311,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 			// 在历史记录中添加问答对
 			chatHistory = append(chatHistory, ChatEntry{
-				Question: fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s", userUploadResp.UserFilename),
+				Question: fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(userUploadResp.UserFilename, ".txt")),
 				Answer:   currentAnswer,
 			})
 		} else if msg.Role == "assistant" {
@@ -395,8 +395,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 				// 在历史记录中添加问答对
 				chatHistory = append(chatHistory, ChatEntry{
-					Question: fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s", userUploadResp.UserFilename),
-					Answer:   fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s", assistantUploadResp.UserFilename),
+					Question: fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(userUploadResp.UserFilename, ".txt")),
+					Answer:   fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(assistantUploadResp.UserFilename, ".txt")),
 				})
 			}
 		}
@@ -426,8 +426,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// 设置基本参数
 	q.Add("page", "1")
 	q.Add("count", "10")
-	q.Add("safeSearch", "Off")
-	q.Add("mkt", "en-US")
+	q.Add("safeSearch", "Moderate")
+	q.Add("mkt", "zh-HK")
 	q.Add("enable_worklow_generation_ux", "true")
 	q.Add("domain", "youchat")
 	q.Add("use_personalization_extraction", "true")
@@ -483,8 +483,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		sourcesJSON, _ := json.Marshal(sources)
 		q.Add("sources", string(sourcesJSON))
 
-		// 使用文件引用作为查询
-		q.Add("q", fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s", uploadResp.UserFilename))
+		// 使用文件引用作为查询，确保包含.txt后缀
+		q.Add("q", fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s.txt", strings.TrimSuffix(uploadResp.UserFilename, ".txt")))
 	} else {
 		// 如果有之前上传的文件，添加 sources
 		if len(sources) > 0 {
@@ -758,10 +758,35 @@ func uploadFile(dsToken, filePath string) (*UploadResponse, error) {
 	}
 	defer resp.Body.Close()
 
-	var uploadResp UploadResponse
-	if err := json.NewDecoder(resp.Body).Decode(&uploadResp); err != nil {
+	// 打印上传响应状态码
+	fmt.Printf("文件上传响应状态码: %d\n", resp.StatusCode)
+
+	// 如果上传失败，记录错误响应
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		fmt.Printf("文件上传错误响应内容: %s\n", string(respBody))
+		return nil, fmt.Errorf("上传文件失败，状态码: %d", resp.StatusCode)
+	}
+
+	// 先读取完整的响应体
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return nil, err
 	}
+
+	// 打印完整的响应内容
+	fmt.Printf("文件上传响应内容: %s\n", string(respBody))
+
+	// 解析响应
+	var uploadResp UploadResponse
+	if err := json.Unmarshal(respBody, &uploadResp); err != nil {
+		return nil, err
+	}
+
+	// 打印解析后的响应
+	fmt.Printf("上传文件成功: filename=%s, user_filename=%s\n",
+		uploadResp.Filename, uploadResp.UserFilename)
+
 	return &uploadResp, nil
 }
 
