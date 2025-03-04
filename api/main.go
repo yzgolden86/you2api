@@ -268,7 +268,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// 处理历史消息（不包括最后一条）
 	for i := 0; i < len(openAIReq.Messages)-1; i += 2 {
 		// 确保有足够的消息
-		if i+1 < len(openAIReq.Messages)-1 {
+		if i+1 < len(openAIReq.Messages) {
 			// 获取当前对话的用户和助手消息
 			userMsg := openAIReq.Messages[i]
 			assistantMsg := openAIReq.Messages[i+1]
