@@ -311,7 +311,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 			// 在历史记录中添加问答对
 			chatHistory = append(chatHistory, ChatEntry{
-				Question: fmt.Sprintf("Please review the attached file: %s", userUploadResp.UserFilename),
+				Question: fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s", userUploadResp.UserFilename),
 				Answer:   currentAnswer,
 			})
 		} else if msg.Role == "assistant" {
@@ -395,8 +395,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 				// 在历史记录中添加问答对
 				chatHistory = append(chatHistory, ChatEntry{
-					Question: fmt.Sprintf("Please review the attached file: %s", userUploadResp.UserFilename),
-					Answer:   fmt.Sprintf("Please review the attached file: %s", assistantUploadResp.UserFilename),
+					Question: fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s", userUploadResp.UserFilename),
+					Answer:   fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s", assistantUploadResp.UserFilename),
 				})
 			}
 		}
@@ -484,7 +484,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		q.Add("sources", string(sourcesJSON))
 
 		// 使用文件引用作为查询
-		q.Add("q", fmt.Sprintf("Please review the attached file: %s", uploadResp.UserFilename))
+		q.Add("q", fmt.Sprintf("查看这个文件并且直接与文件内容进行聊天：%s", uploadResp.UserFilename))
 	} else {
 		// 如果有之前上传的文件，添加 sources
 		if len(sources) > 0 {
@@ -719,9 +719,9 @@ func getNonce(dsToken string) (*NonceResponse, error) {
 
 // 生成短文件名
 func generateShortFileName() string {
-	// 生成10位随机字母数字字符串
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	result := make([]byte, 10)
+	// 生成6位纯英文字母字符串
+	const charset = "abcdefghijklmnopqrstuvwxyz"
+	result := make([]byte, 6)
 	for i := range result {
 		result[i] = charset[rand.Intn(len(charset))]
 	}
@@ -827,7 +827,28 @@ func convertSystemToUser(messages []Message) []Message {
 
 // 添加UTF-8 BOM标记的函数
 func addUTF8BOM(content string) []byte {
+	// 首先确保内容是纯文本
+	content = ensurePlainText(content)
 	// UTF-8 BOM: EF BB BF
 	bom := []byte{0xEF, 0xBB, 0xBF}
 	return append(bom, []byte(content)...)
+}
+
+// 确保内容为纯文本
+func ensurePlainText(content string) string {
+	// 移除可能导致问题的不可打印字符
+	var result strings.Builder
+	for _, r := range content {
+		// 只保留ASCII可打印字符、基本中文字符和基本标点符号
+		if (r >= 32 && r <= 126) || // ASCII可打印字符
+			(r >= 0x4E00 && r <= 0x9FA5) || // 基本汉字
+			(r >= 0x3000 && r <= 0x303F) || // 中文标点
+			r == 0x000A || r == 0x000D { // 换行和回车
+			result.WriteRune(r)
+		} else {
+			// 替换其他字符为空格
+			result.WriteRune(' ')
+		}
+	}
+	return result.String()
 }
