@@ -129,6 +129,7 @@ var modelMap = map[string]string{
 	"command-r-plus":          "command_r_plus",
 	"claude-3-7-sonnet":       "claude_3_7_sonnet",
 	"claude-3-7-sonnet-think": "claude_3_7_sonnet_thinking",
+	"gpt-4.5-preview":         "gpt_4_5_preview",
 }
 
 // getReverseModelMap 创建并返回 modelMap 的反向映射（You.com 模型名称 -> OpenAI 模型名称）。
