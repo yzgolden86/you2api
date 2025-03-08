@@ -17,9 +17,41 @@ import (
 	"github.com/google/uuid"
 )
 
+// 新增：存储agent模型ID的全局变量
+var agentModelIDs []string
+
 func init() {
 	// 初始化随机数生成器
 	rand.Seed(time.Now().UnixNano())
+
+	// 新增：初始化agent模型ID
+	initAgentModelIDs()
+}
+
+// 新增：初始化函数读取环境变量中的agent模型ID
+func initAgentModelIDs() {
+	agentModelIDsStr := os.Getenv("AGENT_MODEL_IDS")
+	if agentModelIDsStr != "" {
+		// 分割字符串，获取所有agent模型ID
+		agentModelIDs = strings.Split(agentModelIDsStr, ",")
+		// 去除每个ID的空白字符
+		for i := range agentModelIDs {
+			agentModelIDs[i] = strings.TrimSpace(agentModelIDs[i])
+		}
+		fmt.Printf("已加载 %d 个Agent模型ID: %v\n", len(agentModelIDs), agentModelIDs)
+	} else {
+		fmt.Println("未设置Agent模型ID环境变量，仅使用默认模型")
+	}
+}
+
+// 新增：检查模型是否为agent模型
+func isAgentModel(modelID string) bool {
+	for _, id := range agentModelIDs {
+		if id == modelID {
+			return true
+		}
+	}
+	return false
 }
 
 // TokenCount 定义了 token 计数的结构
@@ -200,6 +232,16 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		for modelID := range modelMap {
 			models = append(models, ModelDetail{
 				ID:      modelID,
+				Object:  "model",
+				Created: created,
+				OwnedBy: "organization-owner",
+			})
+		}
+
+		// 新增：添加agent模型到模型列表
+		for _, agentID := range agentModelIDs {
+			models = append(models, ModelDetail{
+				ID:      agentID,
 				Object:  "model",
 				Created: created,
 				OwnedBy: "organization-owner",
@@ -460,11 +502,24 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	q.Add("chatId", chatId)
 	q.Add("conversationTurnId", conversationTurnId)
 	q.Add("pastChatLength", fmt.Sprintf("%d", len(chatHistory)))
-	q.Add("selectedChatMode", "custom")
-	q.Add("selectedAiModel", mapModelName(openAIReq.Model))
+	//q.Add("selectedChatMode", "custom")
+	//q.Add("selectedAiModel", mapModelName(openAIReq.Model))
 	q.Add("enable_agent_clarification_questions", "true")
 	q.Add("traceId", traceId)
 	q.Add("use_nested_youchat_updates", "true")
+
+	// 新增：根据模型类型设置不同的参数
+	isAgent := isAgentModel(openAIReq.Model)
+	if isAgent {
+		// 新增：Agent模型: 只使用selectedChatMode=agent模型ID
+		fmt.Printf("使用Agent模型: %s\n", openAIReq.Model)
+		q.Add("selectedChatMode", openAIReq.Model) // 修改：直接使用模型ID作为chatMode
+	} else {
+		// 修改：默认模型: 使用selectedAiModel和selectedChatMode=custom
+		fmt.Printf("使用默认模型: %s (映射为: %s)\n", openAIReq.Model, mapModelName(openAIReq.Model))
+		q.Add("selectedAiModel", mapModelName(openAIReq.Model))
+		q.Add("selectedChatMode", "custom")
+	}
 
 	// 如果最后一条消息超过限制，使用文件上传
 	if lastMessageTokens > MaxContextTokens {
